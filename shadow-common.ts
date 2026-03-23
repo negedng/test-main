@@ -17,10 +17,10 @@ export interface RemoteConfig {
  *  neither -r nor -d is passed to the scripts.
  *
  *  Setup (once per remote):
- *    git remote add team      git@their-server.com:backend.git
+ *    git remote add backend   git@their-server.com:backend.git
  *    git remote add frontend  git@their-server.com:frontend.git  */
 export const REMOTES: RemoteConfig[] = [
-  { remote: "team",     dir: "backend"  },
+  { remote: "backend",  dir: "backend"  },
   { remote: "frontend", dir: "frontend" },
 ];
 
@@ -34,8 +34,13 @@ export const EMPTY_TREE     = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  *  Set to undefined to walk the full history (not recommended on mature repos). */
 export let SYNC_SINCE: string | undefined = "2024-11-01";
 
-// Allow tests to inject config via environment variables
-if (process.env.SHADOW_TEST_REMOTE) {
+// Allow tests to inject config via environment variables.
+// SHADOW_TEST_REMOTES is a JSON array of {remote, dir} objects (for multi-remote tests).
+// SHADOW_TEST_REMOTE / SHADOW_TEST_DIR is the single-remote shorthand.
+if (process.env.SHADOW_TEST_REMOTES) {
+  REMOTES.length = 0;
+  REMOTES.push(...JSON.parse(process.env.SHADOW_TEST_REMOTES));
+} else if (process.env.SHADOW_TEST_REMOTE) {
   REMOTES.length = 0;
   REMOTES.push({
     remote: process.env.SHADOW_TEST_REMOTE,

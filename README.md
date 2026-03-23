@@ -6,10 +6,11 @@ Mirror files between a mono-repo and external team repositories using git. Each 
 
 ```
 ┌──────────────────┐     shadow-pull      ┌──────────────────┐
-│  Team repo       │  ─────────────────>  │  Mono-repo       │
-│  (git remote)    │                      │  backend/        │
-│                  │  <─────────────────  │  frontend/       │
-└──────────────────┘     shadow-push      └──────────────────┘
+│  Team repos      │  ─────────────────>  │  Mono-repo       │
+│  (git remotes)   │                      │  backend/        │
+│  backend         │  <─────────────────  │  frontend/       │
+│  frontend        │     shadow-push      │                  │
+└──────────────────┘                      └──────────────────┘
 ```
 
 ## shadow-pull
@@ -18,7 +19,7 @@ Fetches from a remote and replays each new commit as a patch into the matching s
 
 ```bash
 npx tsx shadow-pull.ts -r frontend
-npx tsx shadow-pull.ts -r team -b feature/auth
+npx tsx shadow-pull.ts -r backend -b feature/auth
 ```
 
 - Preserves original author, committer, and timestamps
@@ -59,7 +60,7 @@ Both scripts accept:
 1. Add git remotes:
 
 ```bash
-git remote add team      git@their-server.com:backend.git
+git remote add backend   git@their-server.com:backend.git
 git remote add frontend  git@their-server.com:frontend.git
 ```
 
@@ -67,7 +68,7 @@ git remote add frontend  git@their-server.com:frontend.git
 
 ```typescript
 export const REMOTES: RemoteConfig[] = [
-  { remote: "team",     dir: "backend"  },
+  { remote: "backend",  dir: "backend"  },
   { remote: "frontend", dir: "frontend" },
 ];
 ```
