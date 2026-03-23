@@ -32,7 +32,19 @@ export const EMPTY_TREE     = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  *  tracking the team via submodule. Accepts any format git understands:
  *    "2024-11-01"  |  "2024-11-01T09:00:00+01:00"  |  "1 month ago"
  *  Set to undefined to walk the full history (not recommended on mature repos). */
-export const SYNC_SINCE: string | undefined = "2024-11-01";
+export let SYNC_SINCE: string | undefined = "2024-11-01";
+
+// Allow tests to inject config via environment variables
+if (process.env.SHADOW_TEST_REMOTE) {
+  REMOTES.length = 0;
+  REMOTES.push({
+    remote: process.env.SHADOW_TEST_REMOTE,
+    dir: process.env.SHADOW_TEST_DIR ?? process.env.SHADOW_TEST_REMOTE,
+  });
+}
+if (process.env.SHADOW_TEST_SINCE !== undefined) {
+  SYNC_SINCE = process.env.SHADOW_TEST_SINCE || undefined;
+}
 
 export type ApplyResult = "applied" | "conflict" | "failed";
 
