@@ -5,9 +5,9 @@ import {
   REMOTES, SYNC_TRAILER, PUSH_TRAILER,
   run, runSafe, refExists, listTeamBranches,
   getCurrentBranch, getCommitMeta, diffForCommit,
-  applyPatch, commitWithMeta, appendTrailer,
+  applyPatch, extractPatchFiles, commitWithMeta, appendTrailer,
   buildAlreadySyncedSetFor, collectTeamCommits,
-  acquireLock, die,
+  acquireLock, die, setSyncSince,
   saveConflictState, loadConflictState, clearConflictState,
 } from "./shadow-common";
 
@@ -15,21 +15,28 @@ import {
 
 const { values } = parseArgs({
   options: {
-    remote: { type: "string",  short: "r" },
-    dir:    { type: "string",  short: "d" },
-    branch: { type: "string",  short: "b" },
-    help:   { type: "boolean", short: "h" },
+    remote:  { type: "string",  short: "r" },
+    dir:     { type: "string",  short: "d" },
+    branch:  { type: "string",  short: "b" },
+    since:   { type: "string",  short: "s" },
+    "dry-run": { type: "boolean", short: "n" },
+    help:    { type: "boolean", short: "h" },
   },
   strict: true,
 });
 
 if (values.help) {
-  console.log("Usage: shadow-pull.ts [-r remote] [-d dir] [-b team-branch]");
-  console.log("  -r  Remote name to pull from     (default: team)");
+  console.log("Usage: shadow-pull.ts [-r remote] [-d dir] [-b team-branch] [-s date] [-n]");
+  console.log("  -r  Remote name to pull from         (default: first entry in REMOTES)");
   console.log("  -d  Local subdirectory to sync into  (default: same as remote name)");
-  console.log("  -b  Team branch to mirror        (default: your current branch)");
+  console.log("  -b  Team branch to mirror            (default: your current branch)");
+  console.log("  -s  Only sync commits after date     (default: SYNC_SINCE in config)");
+  console.log("  -n  Dry run — show what would be synced without applying");
   process.exit(0);
 }
+
+const dryRun = values["dry-run"] ?? false;
+if (values.since !== undefined) setSyncSince(values.since || undefined);
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
@@ -67,7 +74,7 @@ console.log();
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
 console.log(`Fetching from remote '${remote}'...`);
-run(`git fetch ${remote}`);
+run(["fetch", remote]);
 
 if (!refExists(teamRef)) {
   console.error(`✘ '${teamRef}' does not exist. Available branches on '${remote}':`);
@@ -89,7 +96,7 @@ let   skippedOurs = 0;
 for (const hash of allTeamCommits) {
   if (alreadySynced.has(hash)) continue;
 
-  const body = run(`git log -1 --format="%B" ${hash}`);
+  const body = run(["log", "-1", "--format=%B", hash]);
   if (body.includes(`${PUSH_TRAILER}:`)) {
     skippedOurs++;
     continue;
@@ -108,13 +115,24 @@ if (newCommits.length === 0) {
 }
 
 console.log(`Found ${newCommits.length} new commit(s) to mirror.`);
+
+if (dryRun) {
+  console.log("\n[DRY RUN] The following commits would be mirrored:\n");
+  for (const hash of newCommits) {
+    const meta = getCommitMeta(hash);
+    console.log(`  ${meta.short}`);
+  }
+  console.log("\nNo changes were made.");
+  process.exit(0);
+}
+
 console.log();
 
 // ── Resume after conflict resolution ──────────────────────────────────────────
 
 const pendingConflict = loadConflictState(SCRIPT_DIR);
 if (pendingConflict && pendingConflict.remote === remote && pendingConflict.dir === dir) {
-  const unmerged = runSafe("git diff --name-only --diff-filter=U");
+  const unmerged = runSafe(["diff", "--name-only", "--diff-filter=U"]);
   if (unmerged.ok && unmerged.stdout) {
     console.error("✘ There are still unresolved conflicts. Resolve them and stage before re-running.");
     process.exit(1);
@@ -124,9 +142,9 @@ if (pendingConflict && pendingConflict.remote === remote && pendingConflict.dir 
   const meta = getCommitMeta(hash);
   console.log(`  Resuming ${meta.short} (conflict resolved)...`);
 
-  run(`git add ${dir}/`);
+  run(["add", `${dir}/`]);
 
-  const hasStagedChanges = !runSafe("git diff --cached --quiet").ok;
+  const hasStagedChanges = !runSafe(["diff", "--cached", "--quiet"]).ok;
   const syncedMessage    = appendTrailer(meta.message, `${SYNC_TRAILER}: ${hash}`);
 
   if (!hasStagedChanges) {
@@ -174,9 +192,14 @@ for (const hash of newCommits) {
     process.exit(1);
   }
 
-  run(`git add ${dir}/`);
+  // Stage only the files touched by the patch — avoids accidentally staging
+  // untracked files that happen to exist in the subdirectory.
+  const patchFiles = extractPatchFiles(patch, dir);
+  if (patchFiles.length > 0) {
+    run(["add", "--", ...patchFiles]);
+  }
 
-  const hasStagedChanges = !runSafe("git diff --cached --quiet").ok;
+  const hasStagedChanges = !runSafe(["diff", "--cached", "--quiet"]).ok;
   const syncedMessage    = appendTrailer(meta.message, `${SYNC_TRAILER}: ${hash}`);
 
   if (!hasStagedChanges) {

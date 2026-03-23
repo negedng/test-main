@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
@@ -33,6 +33,11 @@ export const EMPTY_TREE     = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
  *    "2024-11-01"  |  "2024-11-01T09:00:00+01:00"  |  "1 month ago"
  *  Set to undefined to walk the full history (not recommended on mature repos). */
 export let SYNC_SINCE: string | undefined = "2024-11-01";
+
+/** Override the SYNC_SINCE cutoff at runtime (e.g. from a --since CLI flag). */
+export function setSyncSince(val: string | undefined): void {
+  SYNC_SINCE = val;
+}
 
 // Allow tests to inject config via environment variables.
 // SHADOW_TEST_REMOTES is a JSON array of {remote, dir} objects (for multi-remote tests).
@@ -70,21 +75,26 @@ export interface CommitMeta {
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
 
-/** Run a command, return trimmed stdout. Throws on non-zero exit. */
-export function run(cmd: string, cwd?: string): string {
-  return execSync(cmd, {
+/** Run a git command (pass args as an array), return trimmed stdout. Throws on non-zero exit. */
+export function run(args: string[], cwd?: string): string {
+  const result = spawnSync("git", args, {
     encoding: "utf8",
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
-  }).trim();
+  });
+  if (result.status !== 0) {
+    const stderr = (result.stderr ?? "").trim();
+    throw new Error(`git ${args[0]} failed (exit ${result.status}): ${stderr}`);
+  }
+  return (result.stdout ?? "").trim();
 }
 
-/** Run a command, return { stdout, stderr, status } — never throws. */
-export function runSafe(cmd: string, cwd?: string) {
-  const result = spawnSync(cmd, {
-    shell: true,
+/** Run a git command (pass args as an array), return { stdout, stderr, status } — never throws. */
+export function runSafe(args: string[], cwd?: string) {
+  const result = spawnSync("git", args, {
     encoding: "utf8",
     cwd,
+    stdio: ["pipe", "pipe", "pipe"],
   });
   return {
     stdout:  (result.stdout ?? "").trim(),
@@ -95,7 +105,7 @@ export function runSafe(cmd: string, cwd?: string) {
 }
 
 export function getCurrentBranch(): string {
-  const result = runSafe("git symbolic-ref --short HEAD");
+  const result = runSafe(["symbolic-ref", "--short", "HEAD"]);
   if (!result.ok) {
     die("You are in a detached HEAD state. Check out a branch first.");
   }
@@ -103,11 +113,11 @@ export function getCurrentBranch(): string {
 }
 
 export function refExists(ref: string): boolean {
-  return runSafe(`git rev-parse --verify ${ref}`).ok;
+  return runSafe(["rev-parse", "--verify", ref]).ok;
 }
 
 export function listTeamBranches(remote: string): string[] {
-  return run(`git branch -r`)
+  return run(["branch", "-r"])
     .split("\n")
     .map(l => l.trim())
     .filter(l => l.startsWith(`${remote}/`) && !l.includes("->"))
@@ -115,7 +125,7 @@ export function listTeamBranches(remote: string): string[] {
 }
 
 export function getCommitMeta(hash: string): CommitMeta {
-  const fmt = (f: string) => run(`git log -1 --format="${f}" ${hash}`);
+  const fmt = (f: string) => run(["log", "-1", `--format=${f}`, hash]);
   return {
     hash,
     authorName:     fmt("%an"),
@@ -160,7 +170,7 @@ export function applyPatch(patch: string, subdir: string): ApplyResult {
     // --3way exits non-zero when there are merge conflicts.
     // Check whether it produced conflict markers (unmerged entries)
     // vs failing entirely (e.g. missing blobs).
-    const unmerged = runSafe("git diff --name-only --diff-filter=U");
+    const unmerged = runSafe(["diff", "--name-only", "--diff-filter=U"]);
     if (unmerged.ok && unmerged.stdout) {
       return "conflict";
     }
@@ -182,18 +192,19 @@ export function applyPatch(patch: string, subdir: string): ApplyResult {
 export function diffForCommit(meta: CommitMeta): string {
   const { hash, parentCount } = meta;
   if (parentCount === 0) {
-    return execSync(`git diff ${EMPTY_TREE} ${hash}`, {
+    const result = spawnSync("git", ["diff", "--binary", EMPTY_TREE, hash], {
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     });
+    return result.stdout ?? "";
   }
-  // Resolve parent hash explicitly to avoid ^ which is a shell escape char on Windows
   const parentRef = parentCount > 1 ? `${hash}^1` : `${hash}^`;
-  const parentHash = run(`git rev-parse "${parentRef}"`);
-  return execSync(`git diff ${parentHash} ${hash}`, {
+  const parentHash = run(["rev-parse", parentRef]);
+  const result = spawnSync("git", ["diff", "--binary", parentHash, hash], {
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });
+  return result.stdout ?? "";
 }
 
 /**
@@ -236,6 +247,31 @@ export function appendTrailer(message: string, trailer: string): string {
   return result.stdout;
 }
 
+/**
+ * Extract file paths mentioned in a unified diff patch.
+ * Returns paths from the b/ side (the "to" file), which are the paths
+ * that will be modified/created by applying the patch.
+ * Also returns deleted paths (where b/ side is /dev/null).
+ */
+export function extractPatchFiles(patch: string, subdir: string): string[] {
+  const files: string[] = [];
+  for (const line of patch.split("\n")) {
+    // Match "diff --git a/foo b/bar"
+    const m = line.match(/^diff --git a\/.+ b\/(.+)$/);
+    if (m) {
+      files.push(`${subdir}/${m[1]}`);
+      continue;
+    }
+    // Also catch deleted files from "--- a/foo" when "+++ /dev/null"
+    const del = line.match(/^--- a\/(.+)$/);
+    if (del && del[1] !== "/dev/null") {
+      const candidate = `${subdir}/${del[1]}`;
+      if (!files.includes(candidate)) files.push(candidate);
+    }
+  }
+  return files;
+}
+
 // ── .shadowignore ─────────────────────────────────────────────────────────────
 
 export interface ShadowIgnore {
@@ -267,7 +303,7 @@ export function parseShadowIgnore(scriptDir: string): ShadowIgnore {
  */
 export function buildAlreadySyncedSet(): Set<string> {
   const synced = new Set<string>();
-  const log = runSafe(`git log --grep="^${SYNC_TRAILER}:" --format="%B"`);
+  const log = runSafe(["log", `--grep=^${SYNC_TRAILER}:`, "--format=%B"]);
   if (!log.ok || !log.stdout) return synced;
 
   for (const line of log.stdout.split("\n")) {
@@ -283,7 +319,7 @@ export function buildAlreadySyncedSet(): Set<string> {
 export function buildAlreadySyncedSetFor(dir: string): Set<string> {
   const synced = new Set<string>();
   const log = runSafe(
-    `git log --grep="^${SYNC_TRAILER}:" --format="%B" -- ${dir}/`
+    ["log", `--grep=^${SYNC_TRAILER}:`, "--format=%B", "--", `${dir}/`]
   );
   if (!log.ok || !log.stdout) return synced;
 
@@ -300,10 +336,10 @@ export function buildAlreadySyncedSetFor(dir: string): Set<string> {
  * history is skipped before the trailer dedup pass runs.
  */
 export function collectTeamCommits(teamRef: string): string[] {
-  const sinceFlag = SYNC_SINCE ? `--after="${SYNC_SINCE}"` : "";
-  const commits = runSafe(
-    `git log --reverse --format="%H" ${sinceFlag} ${teamRef}`
-  );
+  const args = ["log", "--reverse", "--format=%H"];
+  if (SYNC_SINCE) args.push(`--after=${SYNC_SINCE}`);
+  args.push(teamRef);
+  const commits = runSafe(args);
   if (!commits.ok || !commits.stdout) return [];
   return commits.stdout.split("\n").filter(Boolean);
 }
@@ -317,14 +353,33 @@ export function acquireLock(scriptDir: string, name: string): () => void {
 
   if (fs.existsSync(lock)) {
     const existingPid = fs.readFileSync(lock, "utf8").trim();
-    const alive = process.platform === "win32"
-      ? runSafe(`tasklist /FI "PID eq ${existingPid}" /NH`).stdout.includes(existingPid)
-      : runSafe(`kill -0 ${existingPid}`).ok;
+    let alive = false;
+    if (process.platform === "win32") {
+      const r = spawnSync("tasklist", ["/FI", `PID eq ${existingPid}`, "/NH"], {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      alive = (r.stdout ?? "").includes(existingPid);
+    } else {
+      const r = spawnSync("kill", ["-0", existingPid], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      alive = r.status === 0;
+    }
     if (alive) die(`Another ${name} is already running (PID ${existingPid}).`);
     fs.unlinkSync(lock);
   }
 
-  fs.writeFileSync(lock, myPid);
+  // Use O_EXCL for atomic creation — prevents TOCTOU race between
+  // checking the lock and writing it.
+  try {
+    fs.writeFileSync(lock, myPid, { flag: "wx" });
+  } catch (e: any) {
+    if (e.code === "EEXIST") {
+      die(`Another ${name} is already running (lock file appeared during race).`);
+    }
+    throw e;
+  }
 
   const release = () => {
     if (fs.existsSync(lock) && fs.readFileSync(lock, "utf8").trim() === myPid) {

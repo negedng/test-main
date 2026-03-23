@@ -3,7 +3,7 @@ import { parseArgs } from "util";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import {
   REMOTES, PUSH_TRAILER,
   run, runSafe, refExists, listTeamBranches,
@@ -15,23 +15,27 @@ import {
 
 const { values } = parseArgs({
   options: {
-    message: { type: "string",  short: "m" },
-    remote:  { type: "string",  short: "r" },
-    dir:     { type: "string",  short: "d" },
-    branch:  { type: "string",  short: "b" },
-    help:    { type: "boolean", short: "h" },
+    message:   { type: "string",  short: "m" },
+    remote:    { type: "string",  short: "r" },
+    dir:       { type: "string",  short: "d" },
+    branch:    { type: "string",  short: "b" },
+    "dry-run": { type: "boolean", short: "n" },
+    help:      { type: "boolean", short: "h" },
   },
   strict: true,
 });
 
 if (values.help || !values.message) {
-  console.log('Usage: shadow-push.ts -m "Your commit message" [-r remote] [-d dir] [-b team-branch]');
+  console.log('Usage: shadow-push.ts -m "Your commit message" [-r remote] [-d dir] [-b team-branch] [-n]');
   console.log("  -m  Commit message (required)");
-  console.log("  -r  Remote name to push to       (default: team)");
+  console.log("  -r  Remote name to push to           (default: first entry in REMOTES)");
   console.log("  -d  Local subdirectory to push from  (default: same as remote name)");
-  console.log("  -b  Team branch to push to       (default: your current branch)");
+  console.log("  -b  Team branch to push to           (default: your current branch)");
+  console.log("  -n  Dry run — show what would be pushed without pushing");
   process.exit(values.help ? 0 : 1);
 }
+
+const dryRun = values["dry-run"] ?? false;
 
 const commitMsg = values.message;
 
@@ -59,14 +63,14 @@ const remote     = values.remote ?? remoteEntry!.remote;
 const dir        = values.dir    ?? remoteEntry!.dir;
 const teamBranch = values.branch ?? localBranch;
 const teamRef    = `${remote}/${teamBranch}`;
-const localHead  = run("git rev-parse HEAD");
+const localHead  = run(["rev-parse", "HEAD"]);
 
 // Refuse to push if the local dir has uncommitted changes
-const dirtyStaged   = !runSafe(`git diff --cached --quiet -- ${dir}/`).ok;
-const dirtyUnstaged = !runSafe(`git diff --quiet HEAD -- ${dir}/`).ok;
+const dirtyStaged   = !runSafe(["diff", "--cached", "--quiet", "--", `${dir}/`]).ok;
+const dirtyUnstaged = !runSafe(["diff", "--quiet", "HEAD", "--", `${dir}/`]).ok;
 if (dirtyStaged || dirtyUnstaged) {
   console.error(`✘ '${dir}/' has uncommitted changes:\n`);
-  execSync(`git status --short -- ${dir}/`, { stdio: "inherit" });
+  spawnSync("git", ["status", "--short", "--", `${dir}/`], { stdio: "inherit" });
   console.error(`\nCommit or stash them before running shadow-push.`);
   process.exit(1);
 }
@@ -84,7 +88,7 @@ const ignore = parseShadowIgnore(SCRIPT_DIR);
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
 console.log(`Fetching latest from remote '${remote}'...`);
-run(`git fetch ${remote}`);
+run(["fetch", remote]);
 
 let resolvedTeamRef = teamRef;
 
@@ -117,7 +121,8 @@ let   cleanupDone = false;
 const cleanup = () => {
   if (cleanupDone) return;
   cleanupDone = true;
-  runSafe(`git worktree remove --force ${worktreeDir}`);
+  runSafe(["worktree", "remove", "--force", worktreeDir]);
+  runSafe(["branch", "-D", tempBranch]);
   fs.rmSync(worktreeDir, { recursive: true, force: true });
   fs.rmSync(archiveDir,  { recursive: true, force: true });
 };
@@ -128,22 +133,30 @@ process.on("SIGTERM", () => { cleanup(); process.exit(143); });
 
 console.log(`Extracting committed '${dir}/' from HEAD...`);
 // List files tracked by git in the subdirectory and copy them to archiveDir
-const trackedFiles = run(`git ls-tree -r --name-only HEAD -- ${dir}/`)
+const trackedFiles = run(["ls-tree", "-r", "--name-only", "HEAD", "--", `${dir}/`])
   .split("\n")
   .filter(Boolean);
 
-for (const filePath of trackedFiles) {
-  // filePath is e.g. "frontend/README.md" — strip the dir prefix
-  const relPath = filePath.replace(new RegExp(`^${dir}/`), "");
-  const destPath = path.join(archiveDir, relPath);
-  fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  // Extract file content from git index (git requires forward slashes)
-  const gitPath = filePath.replace(/\\/g, "/");
-  const content = execSync(`git show HEAD:${gitPath}`, { encoding: "buffer" });
-  fs.writeFileSync(destPath, content);
+/** Escape a string for use in a RegExp constructor. */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-run(`git worktree add -b ${tempBranch} ${worktreeDir} ${resolvedTeamRef}`);
+for (const filePath of trackedFiles) {
+  // filePath is e.g. "frontend/README.md" — strip the dir prefix
+  const relPath = filePath.replace(new RegExp(`^${escapeRegExp(dir)}/`), "");
+  const destPath = path.join(archiveDir, relPath);
+  fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  // Extract file content from git index using array-form spawnSync
+  const gitPath = filePath.replace(/\\/g, "/");
+  const result = spawnSync("git", ["show", `HEAD:${gitPath}`], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  if (result.status !== 0) die(`Failed to extract ${gitPath} from HEAD`);
+  fs.writeFileSync(destPath, result.stdout);
+}
+
+run(["worktree", "add", "-b", tempBranch, worktreeDir, resolvedTeamRef]);
 
 console.log(`Syncing into temporary worktree...`);
 
@@ -185,20 +198,51 @@ function listAllFiles(dir: string, prefix = ""): string[] {
 }
 
 function globToRegex(pattern: string): RegExp {
-  const escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".");
-  return new RegExp(`^${escaped}$`);
+  let re = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === "*" && pattern[i + 1] === "*") {
+      // ** matches across directory boundaries
+      re += ".*";
+      i += 2;
+      // skip trailing / after ** (e.g., **/)
+      if (pattern[i] === "/") i++;
+    } else if (ch === "*") {
+      // * matches anything except /
+      re += "[^/]*";
+      i++;
+    } else if (ch === "?") {
+      re += "[^/]";
+      i++;
+    } else if (ch === "[") {
+      // Pass through bracket expressions
+      const close = pattern.indexOf("]", i + 1);
+      if (close !== -1) {
+        re += pattern.slice(i, close + 1);
+        i = close + 1;
+      } else {
+        re += "\\[";
+        i++;
+      }
+    } else if (".+^${}()|\\".includes(ch)) {
+      re += "\\" + ch;
+      i++;
+    } else {
+      re += ch;
+      i++;
+    }
+  }
+  return new RegExp(`^${re}$`);
 }
 
 syncDirs(archiveDir, worktreeDir, ignore.patterns);
 
 // ── Commit & push ─────────────────────────────────────────────────────────────
 
-run("git add -A", worktreeDir);
+run(["add", "-A"], worktreeDir);
 
-const hasStagedChanges = !runSafe("git diff --cached --quiet", worktreeDir).ok;
+const hasStagedChanges = !runSafe(["diff", "--cached", "--quiet"], worktreeDir).ok;
 if (!hasStagedChanges) {
   console.log("No changes to push — their repo is already up to date.");
   cleanup();
@@ -206,8 +250,14 @@ if (!hasStagedChanges) {
 }
 
 console.log("\nChanges to be pushed:");
-execSync("git diff --cached --stat", { cwd: worktreeDir, stdio: "inherit" });
+spawnSync("git", ["diff", "--cached", "--stat"], { cwd: worktreeDir, stdio: "inherit" });
 console.log();
+
+if (dryRun) {
+  console.log("[DRY RUN] No changes were pushed.");
+  cleanup();
+  process.exit(0);
+}
 
 const fullMsg = appendTrailer(commitMsg, `${PUSH_TRAILER}: ${localHead}`);
 const commitResult = spawnSync("git", ["commit", "-m", fullMsg], {
@@ -218,7 +268,7 @@ const commitResult = spawnSync("git", ["commit", "-m", fullMsg], {
 if (commitResult.status !== 0) die("git commit failed in worktree.");
 
 console.log(`Pushing to ${remote}/${teamBranch}...`);
-run(`git push ${remote} HEAD:${teamBranch}`, worktreeDir);
+run(["push", remote, `HEAD:${teamBranch}`], worktreeDir);
 
 cleanup();
 
