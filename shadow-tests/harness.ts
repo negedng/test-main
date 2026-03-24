@@ -261,9 +261,3 @@ export function pullRemoteWorking(env: TestEnv, remote?: RemoteInfo): void {
   git("pull origin main", workDir);
 }
 
-/** Resolve conflicts in local repo by writing file content and staging. */
-export function resolveConflict(env: TestEnv, rel: string, content: string): void {
-  const full = path.join(env.localRepo, env.subdir, rel);
-  fs.writeFileSync(full, content);
-  git(`add "${env.subdir}/${rel}"`, env.localRepo);
-}

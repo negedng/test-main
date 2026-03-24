@@ -25,10 +25,8 @@ npx tsx shadow-pull.ts -r backend -b feature/auth
 - Preserves original author, committer, and timestamps
 - Tracks mirrored commits via `Shadow-synced-from: <hash>` trailers to prevent duplicates
 - Falls back to 3-way merge when patches don't apply cleanly
-- On merge conflicts: leaves standard git conflict markers (`<<<<<<<`/`>>>>>>>`), saves state, and exits. After resolving and staging, re-running the command resumes where it left off
 - Skips commits that originated from `shadow-push` (detected via trailer) to prevent round-trip duplication
 - Automatically detects feature branches and only mirrors branch-specific commits (uses `main..feature` range)
-- Warns when the remote branch name differs from your local branch
 
 ## shadow-push
 
@@ -77,19 +75,16 @@ git remote add backend   git@their-server.com:backend.git
 git remote add frontend  git@their-server.com:frontend.git
 ```
 
-2. Edit the `REMOTES` array in `shadow-common.ts`:
+2. Edit `shadow-config.json`:
 
-```typescript
-export const REMOTES: RemoteConfig[] = [
-  { remote: "backend",  dir: "backend"  },
-  { remote: "frontend", dir: "frontend" },
-];
-```
-
-3. Set `SYNC_SINCE` to the date you started syncing (commits before this are ignored):
-
-```typescript
-export const SYNC_SINCE: string | undefined = "2024-11-01";
+```json
+{
+  "remotes": [
+    { "remote": "backend",  "dir": "backend"  },
+    { "remote": "frontend", "dir": "frontend" }
+  ],
+  "syncSince": "2024-11-01"
+}
 ```
 
 ## Initial bootstrap
@@ -113,23 +108,48 @@ npx tsx shadow-push.ts -r frontend -m "My changes"
 
 Without `--seed`, the first pull would attempt to replay every remote commit (after `SYNC_SINCE`) on top of files you already copied, causing conflicts.
 
-## Pulling feature branches
+## shadow-sync-all
 
-To pull a feature branch from a remote, create a matching local branch first:
+Syncs all branches from all remotes into local shadow branches. Each remote branch `<branch>` becomes a local branch `<dir>/shadow-<branch>`.
 
 ```bash
-git checkout -b feature/auth
-npx tsx shadow-pull.ts -r backend -b feature/auth
+npx tsx shadow-sync-all.ts
+npx tsx shadow-sync-all.ts -r frontend
+npx tsx shadow-sync-all.ts -n
+```
+
+Shadow branches are pure mirrors — only `shadow-sync-all` (via `shadow-pull`) writes to them. To incorporate remote changes, merge the shadow branch into your working branch:
+
+```bash
+git merge frontend/shadow-main
+```
+
+**shadow-sync-all options:**
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `-r` | Sync only this remote | All remotes in config |
+| `-n` | Dry run | |
+
+### Branch layout
+
+```
+remote frontend/main          → frontend/shadow-main       (auto-synced)
+remote frontend/feature-auth  → frontend/shadow-feature-auth (auto-synced)
+
+frontend/shadow-main ──merge──→ frontend/main ──shadow-push──→ remote frontend/main
+```
+
+## Pulling feature branches
+
+To pull a single feature branch manually:
+
+```bash
+git checkout -b frontend/feature-auth
+npx tsx shadow-pull.ts -r frontend -b feature/auth
 ```
 
 Shadow-pull automatically detects that `feature/auth` is not the default branch and uses range syntax (`main..feature/auth`) to only mirror the branch-specific commits — not the entire main history.
-
-If you forget to switch branches, shadow-pull will warn you:
-
-```
-⚠ Pulling remote branch 'feature/auth' while on local branch 'main'.
-  Consider: git checkout -b feature/auth
-```
 
 ## Tests
 
@@ -142,15 +162,17 @@ npx tsx shadow-tests/run-all.ts
 Run a single test:
 
 ```bash
-npx tsx shadow-tests/test-pull-conflict.ts
+npx tsx shadow-tests/test-pull-basic.ts
 ```
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `shadow-common.ts` | Shared config, git helpers, patch application, conflict state |
+| `shadow-config.json` | Remotes, sync date, trailers, and other settings |
+| `shadow-common.ts` | Shared config, git helpers, patch application |
 | `shadow-pull.ts` | Mirrors remote commits into a local subdirectory |
 | `shadow-push.ts` | Pushes local subdirectory state to a remote as a single commit |
+| `shadow-sync-all.ts` | Syncs all remote branches into local shadow branches |
 | `.shadowignore` | Glob patterns for files to exclude from push (optional) |
 | `shadow-tests/` | Automated test suite (`npx tsx shadow-tests/run-all.ts`) |

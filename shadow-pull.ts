@@ -1,7 +1,6 @@
 #!/usr/bin/env ts-node
 import { parseArgs } from "util";
 import * as path from "path";
-import { spawnSync } from "child_process";
 import {
   REMOTES, SYNC_TRAILER, PUSH_TRAILER,
   run, runSafe, refExists, listTeamBranches,
@@ -10,7 +9,6 @@ import {
   buildAlreadySyncedSetFor, collectTeamCommits, findSeedHash, findRemoteDefaultBranch,
   SEED_TRAILER,
   acquireLock, validateName, die, setSyncSince,
-  saveConflictState, loadConflictState, clearConflictState,
   preflightChecks, handlePreflightResults,
 } from "./shadow-common";
 
@@ -31,12 +29,6 @@ const { values } = parseArgs({
 
 if (values.help) {
   console.log("Usage: shadow-pull.ts [-r remote] [-d dir] [-b team-branch] [-s date] [-n] [--seed]");
-  console.log("  -r      Remote name to pull from         (default: first entry in REMOTES)");
-  console.log("  -d      Local subdirectory to sync into  (default: same as remote name)");
-  console.log("  -b      Team branch to mirror            (default: your current branch)");
-  console.log("  -s      Only sync commits after date     (default: SYNC_SINCE in config)");
-  console.log("  -n      Dry run — show what would be synced without applying");
-  console.log("  --seed  Record current remote HEAD as sync baseline (skip all existing history)");
   process.exit(0);
 }
 
@@ -52,15 +44,12 @@ const SCRIPT_DIR  = path.dirname(
 );
 const localBranch = getCurrentBranch();
 
-// Resolve remote + dir: explicit flags win, then look up in REMOTES, then fall
-// back to the first entry. -r alone infers dir from REMOTES; -d alone is an error.
 const remoteEntry = values.remote
   ? REMOTES.find(r => r.remote === values.remote)
   : REMOTES[0];
 
 if (values.remote && !remoteEntry) {
-  console.error(`✘ Remote '${values.remote}' not found in REMOTES. Add it to shadow-common.ts.`);
-  process.exit(1);
+  die(`Remote '${values.remote}' not found in REMOTES. Add it to shadow-config.json.`);
 }
 
 const remote     = values.remote ?? remoteEntry!.remote;
@@ -70,32 +59,12 @@ validateName(remote, "Remote name");
 validateName(dir, "Directory");
 const teamRef    = `${remote}/${teamBranch}`;
 
-// Refuse to pull if the local dir has uncommitted changes — applying patches
-// on top of a dirty working tree can silently overwrite local edits.
-// Exception: when resuming after a conflict, the user's staged resolution is expected.
-const resumingConflict = loadConflictState(SCRIPT_DIR);
-if (!resumingConflict || resumingConflict.remote !== remote || resumingConflict.dir !== dir) {
-  const dirtyStaged   = !runSafe(["diff", "--cached", "--quiet", "--", `${dir}/`]).ok;
-  const dirtyUnstaged = !runSafe(["diff", "--quiet", "HEAD", "--", `${dir}/`]).ok;
-  const hasUntracked  = runSafe(["ls-files", "--others", "--exclude-standard", "--", `${dir}/`]).stdout !== "";
-  if (dirtyStaged || dirtyUnstaged || hasUntracked) {
-    console.error(`✘ '${dir}/' has uncommitted changes:\n`);
-    spawnSync("git", ["-c", "core.autocrlf=false", "status", "--short", "--", `${dir}/`], { stdio: "inherit" });
-    console.error(`\nCommit or stash them before running shadow-pull.`);
-    process.exit(1);
-  }
-}
-
 acquireLock(SCRIPT_DIR, "shadow-pull");
 
 console.log(`Remote        : ${remote}`);
 console.log(`Local dir     : ${dir}/`);
 console.log(`Local branch  : ${localBranch}`);
 console.log(`Team branch   : ${teamBranch}`);
-if (teamBranch !== localBranch) {
-  console.warn(`⚠ Pulling remote branch '${teamBranch}' while on local branch '${localBranch}'.`);
-  console.warn(`  Consider: git checkout -b ${teamBranch}`);
-}
 console.log();
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
@@ -140,7 +109,6 @@ if (seedHash) {
   console.log(`Found seed baseline: ${seedHash.slice(0, 10)} (skipping earlier history).`);
 }
 
-// For feature branches, use range syntax to only collect branch-specific commits
 const defaultBranch = findRemoteDefaultBranch(remote);
 const isFeatureBranch = defaultBranch != null && teamBranch !== defaultBranch;
 const baseRef = isFeatureBranch ? `${remote}/${defaultBranch}` : undefined;
@@ -188,38 +156,6 @@ if (dryRun) {
 
 console.log();
 
-// ── Resume after conflict resolution ──────────────────────────────────────────
-
-const pendingConflict = loadConflictState(SCRIPT_DIR);
-if (pendingConflict && pendingConflict.remote === remote && pendingConflict.dir === dir) {
-  const unmerged = runSafe(["diff", "--name-only", "--diff-filter=U"]);
-  if (unmerged.ok && unmerged.stdout) {
-    console.error("✘ There are still unresolved conflicts. Resolve them and stage before re-running.");
-    process.exit(1);
-  }
-
-  const hash = pendingConflict.hash;
-  const meta = getCommitMeta(hash);
-  console.log(`  Resuming ${meta.short} (conflict resolved)...`);
-
-  run(["add", `${dir}/`]);
-
-  const hasStagedChanges = !runSafe(["diff", "--cached", "--quiet"]).ok;
-  const syncedMessage    = appendTrailer(meta.message, `${SYNC_TRAILER}: ${hash}`);
-
-  if (!hasStagedChanges) {
-    console.log("    (no changes after resolution — recording as synced)");
-    commitWithMeta(meta, syncedMessage, /* allowEmpty */ true);
-    console.log("  ✓ Recorded (empty).");
-  } else {
-    commitWithMeta(meta, syncedMessage);
-    console.log("  ✓ Mirrored (conflict resolved).");
-  }
-
-  clearConflictState(SCRIPT_DIR);
-  alreadySynced.add(hash);
-}
-
 // ── Apply commits ─────────────────────────────────────────────────────────────
 
 for (const hash of newCommits) {
@@ -236,24 +172,12 @@ for (const hash of newCommits) {
   console.log(`  Applying ${label}...`);
 
   const patch = diffForCommit(meta);
-
   const result = applyPatch(patch, dir);
 
-  if (result === "conflict") {
-    saveConflictState(SCRIPT_DIR, { hash, remote, dir });
-    console.error(`\n  ✘ Merge conflict while applying ${meta.short}`);
-    console.error(`    Resolve the conflicts, stage your changes, then re-run.`);
-    process.exit(1);
+  if (result !== "applied") {
+    die(`Could not apply patch for ${meta.short}. Shadow branch may be out of sync.`);
   }
 
-  if (result === "failed") {
-    console.error(`\n  ✘ Could not apply patch for ${meta.short}`);
-    console.error(`    The 3-way merge could not be attempted (missing blob objects?).`);
-    process.exit(1);
-  }
-
-  // Stage only the files touched by the patch — avoids accidentally staging
-  // untracked files that happen to exist in the subdirectory.
   const patchFiles = extractPatchFiles(patch, dir);
   if (patchFiles.length > 0) {
     run(["add", "--", ...patchFiles]);
