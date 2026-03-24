@@ -6,7 +6,7 @@ Mirror files between a mono-repo and external team repositories using git. Each 
 
 ```
 ┌──────────────────┐     shadow-pull      ┌──────────────────┐
-│  Team repos      │  <─────────────────  │  Mono-repo       │
+│  Team repos      │  <─────────────────  │                  │
 │  (git remotes)   │                      │  backend/        │
 │  backend         │  ─────────────────>  │  frontend/       │
 │  frontend        │     shadow-push      │                  │
