@@ -5,7 +5,7 @@ import * as fs from "fs";
 import * as os from "os";
 import { spawnSync } from "child_process";
 import {
-  REMOTES, PUSH_TRAILER,
+  REMOTES, PUSH_TRAILER, MAX_DIR_DEPTH, MAX_PUSH_RETRIES,
   run, runSafe, refExists, listTeamBranches,
   getCurrentBranch, appendTrailer,
   parseShadowIgnore, acquireLock, validateName, die,
@@ -197,7 +197,7 @@ function syncDirs(src: string, dest: string, ignorePatterns: string[]) {
   }
 }
 
-const MAX_DIR_DEPTH = 100;
+// MAX_DIR_DEPTH is imported from shadow-common (loaded from shadow-sync.yaml)
 
 function listAllFiles(dir: string, prefix = "", depth = 0): string[] {
   if (depth > MAX_DIR_DEPTH) {
@@ -293,18 +293,17 @@ if (commitResult.status !== 0) die("git commit failed in worktree.");
 console.log(`Pushing to ${remote}/${teamBranch}...`);
 
 // Retry on non-fast-forward: someone may have pushed between our fetch and push.
-const MAX_RETRIES = 3;
-for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
   const pushResult = runSafe(["push", remote, `HEAD:${teamBranch}`], worktreeDir);
   if (pushResult.ok) break;
   const isNonFF = pushResult.stderr.includes("non-fast-forward")
     || pushResult.stderr.includes("rejected")
     || pushResult.stderr.includes("fetch first");
-  if (!isNonFF || attempt === MAX_RETRIES) {
+  if (!isNonFF || attempt === MAX_PUSH_RETRIES) {
     console.error(pushResult.stderr);
     die(`git push failed after ${attempt} attempt(s).`);
   }
-  console.log(`  Push rejected (non-fast-forward), retrying (${attempt}/${MAX_RETRIES})...`);
+  console.log(`  Push rejected (non-fast-forward), retrying (${attempt}/${MAX_PUSH_RETRIES})...`);
   // Re-fetch, rebase the worktree branch on the updated remote
   run(["fetch", remote]);
   const updatedRef = run(["rev-parse", `${remote}/${teamBranch}`]);

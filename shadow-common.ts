@@ -13,27 +13,47 @@ export interface RemoteConfig {
   dir: string;
 }
 
-/** All remotes you are shadowing. The first entry is the default used when
- *  neither -r nor -d is passed to the scripts.
- *
- *  Setup (once per remote):
- *    git remote add backend   git@their-server.com:backend.git
- *    git remote add frontend  git@their-server.com:frontend.git  */
-export const REMOTES: RemoteConfig[] = [
-  { remote: "backend",  dir: "backend"  },
-  { remote: "frontend", dir: "frontend" },
-];
+interface ShadowSyncConfig {
+  remotes: RemoteConfig[];
+  syncSince?: string | null;
+  trailers: { sync: string; push: string; seed: string };
+  gitConfigOverrides: Record<string, string>;
+  maxBuffer: number;
+  maxDirDepth: number;
+  maxPushRetries: number;
+}
 
-export const SYNC_TRAILER   = "Shadow-synced-from";
-export const PUSH_TRAILER   = "Shadow-pushed-from";
-export const SEED_TRAILER   = "Shadow-seed";
+const CONFIG_PATH = path.join(__dirname, "shadow-config.json");
+
+function loadConfig(): ShadowSyncConfig {
+  const raw = fs.readFileSync(CONFIG_PATH, "utf8");
+  const doc = JSON.parse(raw) as Record<string, unknown>;
+  return {
+    remotes:           (doc.remotes as RemoteConfig[]) ?? [],
+    syncSince:         doc.syncSince === null ? undefined : (doc.syncSince as string | undefined),
+    trailers: {
+      sync: ((doc.trailers as Record<string, string>)?.sync) ?? "Shadow-synced-from",
+      push: ((doc.trailers as Record<string, string>)?.push) ?? "Shadow-pushed-from",
+      seed: ((doc.trailers as Record<string, string>)?.seed) ?? "Shadow-seed",
+    },
+    gitConfigOverrides: (doc.gitConfigOverrides as Record<string, string>) ?? {},
+    maxBuffer:          (doc.maxBuffer as number) ?? 50 * 1024 * 1024,
+    maxDirDepth:        (doc.maxDirDepth as number) ?? 100,
+    maxPushRetries:     (doc.maxPushRetries as number) ?? 3,
+  };
+}
+
+const config = loadConfig();
+
+export const REMOTES: RemoteConfig[] = [...config.remotes];
+export const SYNC_TRAILER   = config.trailers.sync;
+export const PUSH_TRAILER   = config.trailers.push;
+export const SEED_TRAILER   = config.trailers.seed;
 export const EMPTY_TREE     = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+export const MAX_DIR_DEPTH  = config.maxDirDepth;
+export const MAX_PUSH_RETRIES = config.maxPushRetries;
 
-/** Only mirror commits after this date. Set this to the date you stopped
- *  tracking the team via submodule. Accepts any format git understands:
- *    "2024-11-01"  |  "2024-11-01T09:00:00+01:00"  |  "1 month ago"
- *  Set to undefined to walk the full history (not recommended on mature repos). */
-export let SYNC_SINCE: string | undefined = "2024-11-01";
+export let SYNC_SINCE: string | undefined = config.syncSince ?? undefined;
 
 /** Override the SYNC_SINCE cutoff at runtime (e.g. from a --since CLI flag). */
 export function setSyncSince(val: string | undefined): void {
@@ -76,23 +96,12 @@ export interface CommitMeta {
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
 
-/** 50 MB — large enough for big binary diffs, prevents silent truncation. */
-const MAX_BUFFER = 50 * 1024 * 1024;
+const MAX_BUFFER = config.maxBuffer;
 
-/**
- * Git config overrides for cross-OS consistency.
- * These ensure diffs and applies behave identically on Linux, macOS, and Windows:
- *   core.autocrlf=false  — prevent line-ending conversion that breaks patches
- *   core.safecrlf=false  — don't reject files with mixed line endings
- *   core.filemode=false  — ignore file permission changes (Windows has no chmod)
- *   core.precomposeunicode=true — normalize NFD→NFC on macOS
- */
-const GIT_CONFIG_OVERRIDES = [
-  "-c", "core.autocrlf=false",
-  "-c", "core.safecrlf=false",
-  "-c", "core.precomposeunicode=true",
-  "-c", "core.quotepath=false",
-];
+/** Git config overrides for cross-OS consistency, loaded from shadow-sync.yaml. */
+const GIT_CONFIG_OVERRIDES = Object.entries(config.gitConfigOverrides).flatMap(
+  ([key, value]) => ["-c", `${key}=${value}`],
+);
 
 /** Run a git command (pass args as an array), return trimmed stdout. Throws on non-zero exit. */
 export function run(args: string[], cwd?: string): string {

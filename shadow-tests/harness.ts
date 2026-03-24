@@ -63,9 +63,9 @@ export function createTestEnv(name: string, subdir = "frontend"): TestEnv {
   git(`remote add ${remoteName} "${remoteBare}"`, localRepo);
   git(`fetch ${remoteName}`, localRepo);
 
-  // Copy shadow scripts into local repo so they run from there
+  // Copy shadow scripts and config into local repo so they run from there
   const scriptDir = path.resolve(__dirname, "..");
-  for (const f of ["shadow-common.ts", "shadow-pull.ts", "shadow-push.ts"]) {
+  for (const f of ["shadow-common.ts", "shadow-pull.ts", "shadow-push.ts", "shadow-config.json"]) {
     fs.copyFileSync(path.join(scriptDir, f), path.join(localRepo, f));
   }
 
