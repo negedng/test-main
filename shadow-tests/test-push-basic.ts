@@ -14,7 +14,7 @@ export default function run() {
     commitOnLocal(env, { "new-feature.ts": "export function feat() {}\n" }, "Add new feature");
 
     // Export to shadow branch
-    const r2 = runPush(env, "Add new feature from mono-repo");
+    const r2 = runPush(env, "Add new feature from internal repo");
     assertEqual(r2.status, 0, "export should succeed");
     assertIncludes(r2.stdout, "Done", "should report done");
 
@@ -27,7 +27,7 @@ export default function run() {
 
     // Shadow commit should have the commit message
     const shadowLog = getShadowLogFull(env);
-    assertIncludes(shadowLog, "Add new feature from mono-repo", "shadow commit should have the message");
+    assertIncludes(shadowLog, "Add new feature from internal repo", "shadow commit should have the message");
   } finally {
     env.cleanup();
   }

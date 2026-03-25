@@ -1,10 +1,8 @@
 {
   "remotes": [
-    { "remote": "backend",  "dir": "backend"  },
-    { "remote": "frontend", "dir": "frontend" }
+    { "remote": "backend",  "dir": "backend",  "url": "https://github.com/org/backend.git"  },
+    { "remote": "frontend", "dir": "frontend", "url": "https://github.com/org/frontend.git" }
   ],
-
-  "syncSince": "2024-11-01",
 
   "trailers": {
     "sync": "Shadow-synced-from",
@@ -20,5 +18,6 @@
 
   "maxBuffer": 52428800,
   "maxDirDepth": 100,
-  "maxPushRetries": 3
+  "maxPushRetries": 3,
+  "shadowBranchPrefix": "shadow"
 }

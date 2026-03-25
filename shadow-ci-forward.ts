@@ -11,8 +11,6 @@
  * here (.shadowignore is applied during shadow-export, before content reaches
  * the shadow branch).
  *
- * Remote URLs are resolved from environment variables:
- *   SHADOW_REMOTE_{NAME}_URL  (e.g. SHADOW_REMOTE_BACKEND_URL)
  */
 import * as fs from "fs";
 import * as os from "os";
@@ -21,7 +19,7 @@ import { spawnSync } from "child_process";
 import {
   REMOTES, SHADOW_BRANCH_PREFIX, MAX_DIR_DEPTH,
   run, runSafe, refExists,
-  resolveRemoteUrl, validateName, die,
+  validateName, die,
 } from "./shadow-common";
 
 // ── Determine which shadow branch was pushed ─────────────────────────────────
@@ -43,7 +41,7 @@ if (slashIdx === -1) {
   die(`Cannot parse shadow branch name '${refName}'. Expected format: ${prefix}{dir}/{branch}`);
 }
 const dir = rest.slice(0, slashIdx);
-const teamBranch = rest.slice(slashIdx + 1);
+const externalBranch = rest.slice(slashIdx + 1);
 validateName(dir, "Directory");
 
 // Find the matching remote config entry
@@ -53,17 +51,15 @@ if (!remoteEntry) {
 }
 const remote = remoteEntry.remote;
 
-// Resolve URL
-const resolvedUrl = resolveRemoteUrl(remote, remoteEntry.url);
-if (!resolvedUrl) {
-  const envKey = `SHADOW_REMOTE_${remote.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_URL`;
-  die(`No URL for remote '${remote}'. Set ${envKey}.`);
+if (!remoteEntry.url) {
+  die(`No URL for remote '${remote}'. Add url to shadow-config.json.`);
 }
+const resolvedUrl = remoteEntry.url;
 
 console.log(`Shadow branch : ${refName}`);
 console.log(`Remote        : ${remote}`);
 console.log(`Directory     : ${dir}/`);
-console.log(`Team branch   : ${teamBranch}`);
+console.log(`External branch   : ${externalBranch}`);
 console.log();
 
 // ── Add external remote and fetch ────────────────────────────────────────────
@@ -80,8 +76,7 @@ run(["fetch", remote]);
 
 // ── Snapshot shadow branch content into external remote ──────────────────────
 
-const shadowHead = run(["rev-parse", `origin/${refName}`]);
-const externalRef = `${remote}/${teamBranch}`;
+const externalRef = `${remote}/${externalBranch}`;
 const externalExists = refExists(externalRef);
 
 // Create a worktree from the external remote branch
@@ -160,15 +155,15 @@ if (commitResult.error) die(`Failed to spawn git: ${commitResult.error.message}`
 if (commitResult.status !== 0) die("git commit failed in worktree.");
 
 // Push to external remote
-console.log(`\nPushing to ${remote}/${teamBranch}...`);
-const pushResult = runSafe(["push", remote, `HEAD:${teamBranch}`], worktreeDir);
+console.log(`\nPushing to ${remote}/${externalBranch}...`);
+const pushResult = runSafe(["push", remote, `HEAD:${externalBranch}`], worktreeDir);
 if (!pushResult.ok) {
   console.error(pushResult.stderr);
-  die(`git push to ${remote}/${teamBranch} failed.`);
+  die(`git push to ${remote}/${externalBranch} failed.`);
 }
 
 cleanup();
-console.log(`\n✓ Done. Forwarded shadow/${dir}/${teamBranch} → ${remote}/${teamBranch}.`);
+console.log(`\n✓ Done. Forwarded shadow/${dir}/${externalBranch} → ${remote}/${externalBranch}.`);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

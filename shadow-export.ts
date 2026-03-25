@@ -70,10 +70,10 @@ if (values.remote && !remoteEntry) {
 
 const remote     = values.remote ?? remoteEntry!.remote;
 const dir        = values.dir    ?? remoteEntry!.dir;
-const teamBranch = values.branch ?? localBranch;
+const externalBranch = values.branch ?? localBranch;
 validateName(remote, "Remote name");
 validateName(dir, "Directory");
-const shadowBranch = shadowBranchName(dir, teamBranch);
+const shadowBranch = shadowBranchName(dir, externalBranch);
 // Configurable via env var for testing.
 const pushOrigin   = process.env.SHADOW_PUSH_ORIGIN ?? "origin";
 const shadowRef    = `${pushOrigin}/${shadowBranch}`;

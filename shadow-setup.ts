@@ -7,20 +7,17 @@
  *
  * What it does:
  *   1. Fetches from the external remote
- *   2. Creates the shadow branch (shadow/{dir}/{branch}) on origin as an orphan
- *   3. Records a seed commit so CI sync skips existing history
+ *   2. Records a seed commit so CI sync skips existing history
  *
  * Usage:
  *   npx tsx shadow-setup.ts -r backend
  *   npx tsx shadow-setup.ts -r frontend -b feature/auth
  */
 import { parseArgs } from "util";
-import * as path from "path";
-import { spawnSync } from "child_process";
 import {
   REMOTES, SEED_TRAILER,
-  run, runSafe, refExists, listTeamBranches,
-  getCurrentBranch, appendTrailer, shadowBranchName,
+  run, refExists, listExternalBranches,
+  getCurrentBranch, appendTrailer,
   validateName, die,
   preflightChecks, handlePreflightResults,
 } from "./shadow-common";
@@ -57,19 +54,15 @@ if (values.remote && !remoteEntry) {
 
 const remote     = values.remote ?? remoteEntry!.remote;
 const dir        = values.dir    ?? remoteEntry!.dir;
-const teamBranch = values.branch ?? localBranch;
+const externalBranch = values.branch ?? localBranch;
 validateName(remote, "Remote name");
 validateName(dir, "Directory");
 
-const pushOrigin   = process.env.SHADOW_PUSH_ORIGIN ?? "origin";
-const shadowBranch = shadowBranchName(dir, teamBranch);
-const teamRef      = `${remote}/${teamBranch}`;
-const shadowRef    = `${pushOrigin}/${shadowBranch}`;
+const externalRef      = `${remote}/${externalBranch}`;
 
 console.log(`Remote        : ${remote}`);
 console.log(`Directory     : ${dir}/`);
-console.log(`Team branch   : ${teamBranch}`);
-console.log(`Shadow branch : ${shadowBranch}`);
+console.log(`External branch   : ${externalBranch}`);
 console.log();
 
 // ── Fetch external remote ────────────────────────────────────────────────────
@@ -77,53 +70,23 @@ console.log();
 console.log(`Fetching from '${remote}'...`);
 run(["fetch", remote]);
 
-if (!refExists(teamRef)) {
-  console.error(`✘ '${teamRef}' does not exist. Available branches on '${remote}':`);
-  listTeamBranches(remote).forEach(b => console.error(`  ${b}`));
+if (!refExists(externalRef)) {
+  console.error(`✘ '${externalRef}' does not exist. Available branches on '${remote}':`);
+  listExternalBranches(remote).forEach(b => console.error(`  ${b}`));
   process.exit(1);
 }
 
 // Pre-flight checks
-const warnings = preflightChecks(remote, teamRef);
+const warnings = preflightChecks(externalRef);
 if (!handlePreflightResults(warnings)) {
   process.exit(1);
 }
 
-// ── Fetch origin ─────────────────────────────────────────────────────────────
-
-console.log(`Fetching from '${pushOrigin}'...`);
-runSafe(["fetch", pushOrigin]);
-
-// ── Create shadow branch if needed ───────────────────────────────────────────
-
-if (refExists(shadowRef)) {
-  console.log(`Shadow branch '${shadowRef}' already exists. Skipping creation.`);
-} else {
-  console.log(`Creating shadow branch '${shadowBranch}'...`);
-
-  // Create an orphan branch with an empty initial commit
-  const tempBranch = `shadow-setup-${Date.now()}`;
-  run(["checkout", "--orphan", tempBranch]);
-  run(["reset", "--hard"]);
-  spawnSync("git", ["commit", "--allow-empty", "-m", "Initialize shadow branch"], {
-    encoding: "utf8", stdio: "inherit",
-  });
-
-  // Push to origin as the shadow branch
-  run(["push", pushOrigin, `HEAD:${shadowBranch}`]);
-
-  // Clean up: go back to original branch, delete temp
-  run(["checkout", localBranch]);
-  runSafe(["branch", "-D", tempBranch]);
-
-  console.log(`✓ Created ${pushOrigin}/${shadowBranch}.`);
-}
-
 // ── Seed ─────────────────────────────────────────────────────────────────────
 
-const tipHash = run(["rev-parse", teamRef]);
+const tipHash = run(["rev-parse", externalRef]);
 const msg = appendTrailer(
-  `Seed shadow-sync for ${dir}/ from ${teamRef}`,
+  `Seed shadow-sync for ${dir}/ from ${externalRef}`,
   `${SEED_TRAILER}: ${dir} ${tipHash}`,
 );
 run(["commit", "--allow-empty", "-m", msg]);

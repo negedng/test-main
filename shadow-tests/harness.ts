@@ -37,7 +37,7 @@ export function createTestEnv(name: string, subdir = "frontend"): TestEnv {
   const localRepo = path.join(tmpDir, "local").replace(/\\/g, "/");
   const remoteName = "team";
 
-  // 1) Bare remote (external team repo)
+  // 1) Bare remote (external repo)
   fs.mkdirSync(remoteBare);
   git("init --bare", remoteBare);
 
@@ -51,20 +51,20 @@ export function createTestEnv(name: string, subdir = "frontend"): TestEnv {
   git('commit -m "Initial commit"', remoteWorking);
   git("push origin main", remoteWorking);
 
-  // 3) Bare "origin" (monorepo on GitHub — target for shadow branches)
+  // 3) Bare "origin" (internal repo on GitHub — target for shadow branches)
   fs.mkdirSync(originBare);
   git("init --bare", originBare);
 
-  // 4) Local mono-repo
+  // 4) Local internal repo
   fs.mkdirSync(localRepo);
   git("init", localRepo);
   git('config user.email "local@test.com"', localRepo);
   git('config user.name "Local Dev"', localRepo);
   git("config core.autocrlf false", localRepo);
-  fs.writeFileSync(path.join(localRepo, "mono.txt"), "mono-repo root\n");
+  fs.writeFileSync(path.join(localRepo, "mono.txt"), "internal repo root\n");
   fs.mkdirSync(path.join(localRepo, subdir), { recursive: true });
   git("add -A", localRepo);
-  git('commit -m "Initial mono-repo commit"', localRepo);
+  git('commit -m "Initial internal repo commit"', localRepo);
   // Add remotes
   git(`remote add ${remoteName} "${remoteBare}"`, localRepo);
   git(`fetch ${remoteName}`, localRepo);
@@ -135,7 +135,7 @@ export function addRemote(env: TestEnv, remoteName: string, subdir: string): Rem
   return info;
 }
 
-/** Commit files on the remote (simulates a teammate). null value = delete.
+/** Commit files on the remote (simulates an external developer). null value = delete.
  *  Optionally pass a RemoteInfo to target a specific remote (defaults to primary). */
 export function commitOnRemote(
   env: TestEnv,
@@ -234,18 +234,12 @@ function shellQuote(s: string): string {
 function ciEnv(env: TestEnv): Record<string, string> {
   const base: Record<string, string> = {
     ...process.env as Record<string, string>,
-    SHADOW_TEST_SINCE: "",
     SHADOW_PUSH_ORIGIN: "origin",
   };
-  // Provide remote URLs via env vars (like GitHub secrets)
-  for (const r of env.remotes) {
-    const key = `SHADOW_REMOTE_${r.remoteName.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_URL`;
-    base[key] = r.remoteBare;
-  }
   // Override REMOTES config
   if (env.remotes.length > 1) {
     base.SHADOW_TEST_REMOTES = JSON.stringify(
-      env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir }))
+      env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir, url: r.remoteBare }))
     );
   } else {
     base.SHADOW_TEST_REMOTE = env.remoteName;
@@ -258,12 +252,11 @@ function ciEnv(env: TestEnv): Record<string, string> {
 function localEnv(env: TestEnv): Record<string, string> {
   const base: Record<string, string> = {
     ...process.env as Record<string, string>,
-    SHADOW_TEST_SINCE: "",
     SHADOW_PUSH_ORIGIN: "origin",
   };
   if (env.remotes.length > 1) {
     base.SHADOW_TEST_REMOTES = JSON.stringify(
-      env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir }))
+      env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir, url: r.remoteBare }))
     );
   } else {
     base.SHADOW_TEST_REMOTE = env.remoteName;
@@ -378,7 +371,7 @@ export function getShadowLogFull(env: TestEnv, n = 20, remote?: RemoteInfo): str
 
 /**
  * Merge the shadow branch into the local working branch.
- * Simulates what a user does to pull team changes locally.
+ * Simulates what a user does to pull external changes locally.
  */
 export function mergeShadow(env: TestEnv, remote?: RemoteInfo): void {
   const subdir = remote?.subdir ?? env.subdir;

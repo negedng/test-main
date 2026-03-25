@@ -1,6 +1,6 @@
 # Shadow Sync
 
-Mirror files between a mono-repo and external team repositories using git. Each external repo maps to a local subdirectory (e.g. `backend/`, `frontend/`). Commits are replayed individually to preserve authorship, timestamps, and history.
+Mirror files between an internal repo and external repositories using git. Each external repo maps to a local subdirectory (e.g. `backend/`, `frontend/`). Commits are replayed individually to preserve authorship, timestamps, and history.
 
 ## How it works
 
@@ -13,19 +13,19 @@ Three copies of the code:
 
 | Name | Where | What |
 |------|-------|------|
-| **external** | Team's repo (e.g. `github.com/org/backend`) | The team's source of truth |
+| **external** | External repo (e.g. `github.com/org/backend`) | The external source of truth |
 | **shadow** | `shadow/backend/main` branch on your origin | Mirror of external, stays in sync via CI |
-| **origin** | Your working branch (`main`, `feature/...`) | Your monorepo with all subdirs |
+| **origin** | Your working branch (`main`, `feature/...`) | Your internal repo with all subdirs |
 
 **CI keeps external ↔ shadow in sync** (per-commit replay, no filtering).
 
 **You merge between shadow ↔ origin locally:**
-- `git merge origin/shadow/backend/main` — pull team changes (no filtering)
+- `git merge origin/shadow/backend/main` — pull external changes (no filtering)
 - `npm run export -m "msg"` — push your changes (`.shadowignore` strips AI files etc.)
 
 ## Local workflow
 
-### Pulling team changes
+### Pulling external changes
 
 ```bash
 git fetch origin
@@ -72,13 +72,6 @@ Runs every 15 minutes (and on manual dispatch). For each configured remote:
 
 Triggers on push to `shadow/**` branches. Takes a snapshot of the `{dir}/` content (stripping the subdirectory prefix) and pushes to the external remote.
 
-### Required secrets
-
-| Secret | Description |
-|--------|-------------|
-| `BACKEND_REPO_URL` | Authenticated URL for the backend repo (e.g. `https://x-access-token:TOKEN@github.com/org/backend.git`) |
-| `FRONTEND_REPO_URL` | Authenticated URL for the frontend repo |
-
 ## Options
 
 **shadow-export:**
@@ -106,16 +99,13 @@ Triggers on push to `shadow/**` branches. Takes a snapshot of the `{dir}/` conte
 ```json
 {
   "remotes": [
-    { "remote": "backend",  "dir": "backend"  },
-    { "remote": "frontend", "dir": "frontend" }
-  ],
-  "syncSince": "2024-11-01"
+    { "remote": "backend",  "dir": "backend",  "url": "https://github.com/org/backend.git"  },
+    { "remote": "frontend", "dir": "frontend", "url": "https://github.com/org/frontend.git" }
+  ]
 }
 ```
 
-2. Add GitHub Secrets for external repo URLs (see [Required secrets](#required-secrets)).
-
-3. Add git remotes for each external repo:
+2. Add git remotes for each external repo:
 
 ```bash
 git remote add backend   git@their-server.com:backend.git
@@ -125,7 +115,7 @@ git remote add frontend  git@their-server.com:frontend.git
 ## Initial bootstrap
 
 ```bash
-# 1. Run setup for each remote (creates shadow branch + seed baseline)
+# 1. Run setup for each remote (records seed baseline)
 npm run setup -- -r backend
 npm run setup -- -r frontend
 
@@ -136,7 +126,7 @@ git push
 npm run export -- -m "My changes"
 ```
 
-The setup script creates the shadow branch on origin and records a seed commit so CI sync skips existing history.
+The setup script records a seed commit so CI sync skips existing history. Shadow branches are created automatically by CI sync.
 
 ## Branch layout
 
@@ -161,9 +151,8 @@ npx tsx shadow-tests/test-pull-basic.ts   # Run a single test
 |------|---------|
 | `shadow-config.json` | Remotes, sync date, trailers, and other settings |
 | `shadow-common.ts` | Shared config, git helpers, patch application, replay engine |
-| `shadow-setup.ts` | Bootstrap: creates shadow branch and seed baseline |
+| `shadow-setup.ts` | Bootstrap: records seed baseline so CI sync skips existing history |
 | `shadow-export.ts` | Exports local subdirectory to shadow branch (with `.shadowignore` filtering) |
-| `shadow-sync-all.ts` | Syncs all remote branches into local shadow branches |
 | `shadow-ci-sync.ts` | CI: replays remote commits to shadow branches |
 | `shadow-ci-forward.ts` | CI: forwards shadow branch content to external remotes |
 | `.github/workflows/shadow-sync.yml` | CI pull workflow (cron every 15 min) |

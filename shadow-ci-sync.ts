@@ -5,17 +5,14 @@
  * For each configured remote, fetches from the external repo and replays
  * new commits into shadow/{dir}/{branch} branches, then pushes them to origin.
  *
- * Remote URLs are resolved from environment variables:
- *   SHADOW_REMOTE_{NAME}_URL  (e.g. SHADOW_REMOTE_BACKEND_URL)
- *
  * Intended to run in CI (GitHub Actions) where:
  *   - The repo is checked out with full history (fetch-depth: 0)
  *   - Concurrency is managed by the workflow's concurrency group
  */
 import {
   REMOTES,
-  run, runSafe, refExists, listTeamBranches,
-  resolveRemoteUrl, shadowBranchName,
+  run, runSafe, refExists, listExternalBranches,
+  shadowBranchName,
   replayCommits, preflightChecks, handlePreflightResults,
   validateName,
 } from "./shadow-common";
@@ -26,20 +23,17 @@ for (const { remote, dir, url } of REMOTES) {
   validateName(remote, "Remote name");
   validateName(dir, "Directory");
 
-  // 1. Resolve URL from env var (or config fallback)
-  const resolvedUrl = resolveRemoteUrl(remote, url);
-  if (!resolvedUrl) {
-    const envKey = `SHADOW_REMOTE_${remote.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_URL`;
-    console.error(`⚠ No URL for remote '${remote}'. Set ${envKey} or add url to shadow-config.json. Skipping.`);
+  if (!url) {
+    console.error(`⚠ No URL for remote '${remote}'. Add url to shadow-config.json. Skipping.`);
     continue;
   }
 
-  // 2. Add or update the git remote
+  // Add or update the git remote
   const existing = runSafe(["remote", "get-url", remote]);
   if (!existing.ok) {
-    run(["remote", "add", remote, resolvedUrl]);
-  } else if (existing.stdout !== resolvedUrl) {
-    run(["remote", "set-url", remote, resolvedUrl]);
+    run(["remote", "add", remote, url]);
+  } else if (existing.stdout !== url) {
+    run(["remote", "set-url", remote, url]);
   }
 
   // 3. Fetch from external remote
@@ -47,22 +41,22 @@ for (const { remote, dir, url } of REMOTES) {
   run(["fetch", remote]);
 
   // 4. Process each branch on the remote
-  const branches = listTeamBranches(remote);
+  const branches = listExternalBranches(remote);
   if (branches.length === 0) {
     console.log(`  No branches found on '${remote}'.`);
     continue;
   }
 
   for (const branch of branches) {
-    const teamRef = `${remote}/${branch}`;
+    const externalRef = `${remote}/${branch}`;
     const shadow = shadowBranchName(dir, branch);
 
-    console.log(`\n── ${teamRef} → ${shadow} ──`);
+    console.log(`\n── ${externalRef} → ${shadow} ──`);
 
     // Pre-flight checks
-    const warnings = preflightChecks(remote, teamRef);
+    const warnings = preflightChecks(externalRef);
     if (!handlePreflightResults(warnings)) {
-      console.error(`  Skipping ${teamRef} due to preflight errors.`);
+      console.error(`  Skipping ${externalRef} due to preflight errors.`);
       failed++;
       continue;
     }
@@ -77,7 +71,7 @@ for (const { remote, dir, url } of REMOTES) {
 
     // Run the per-commit replay
     try {
-      const result = replayCommits({ remote, dir, teamBranch: branch });
+      const result = replayCommits({ remote, dir, externalBranch: branch });
 
       if (!result.upToDate) {
         console.log(`  Pushing ${result.mirrored} new commit(s) to origin/${shadow}...`);
@@ -87,7 +81,7 @@ for (const { remote, dir, url } of REMOTES) {
         console.log(`  ${shadow} is up to date.`);
       }
     } catch (err: any) {
-      console.error(`  ✘ Failed to replay ${teamRef}: ${err.message}`);
+      console.error(`  ✘ Failed to replay ${externalRef}: ${err.message}`);
       failed++;
       // Reset any partial state before moving to next branch
       runSafe(["reset", "--hard"]);

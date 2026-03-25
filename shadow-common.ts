@@ -11,13 +11,12 @@ export interface RemoteConfig {
   remote: string;
   /** Local subdirectory in your repo that maps to the root of that remote */
   dir: string;
-  /** Optional URL for the remote (can be overridden via SHADOW_REMOTE_{NAME}_URL env var) */
+  /** URL for the external repo */
   url?: string;
 }
 
 interface ShadowSyncConfig {
   remotes: RemoteConfig[];
-  syncSince?: string;
   trailers: { sync: string; seed: string };
   gitConfigOverrides: Record<string, string>;
   maxBuffer: number;
@@ -33,7 +32,6 @@ function loadConfig(): ShadowSyncConfig {
   const doc = JSON.parse(raw) as Record<string, unknown>;
   return {
     remotes:           (doc.remotes as RemoteConfig[]) ?? [],
-    syncSince:         (doc.syncSince as string | undefined) ?? undefined,
     trailers: {
       sync: ((doc.trailers as Record<string, string>)?.sync) ?? "Shadow-synced-from",
       seed: ((doc.trailers as Record<string, string>)?.seed) ?? "Shadow-seed",
@@ -65,11 +63,6 @@ if (process.env.SHADOW_TEST_REMOTES) {
     remote: process.env.SHADOW_TEST_REMOTE,
     dir: process.env.SHADOW_TEST_DIR ?? process.env.SHADOW_TEST_REMOTE,
   });
-}
-
-let SYNC_SINCE: string | undefined = config.syncSince;
-if (process.env.SHADOW_TEST_SINCE !== undefined) {
-  SYNC_SINCE = process.env.SHADOW_TEST_SINCE || undefined;
 }
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
@@ -136,7 +129,7 @@ export function refExists(ref: string): boolean {
   return runSafe(["rev-parse", "--verify", ref]).ok;
 }
 
-export function listTeamBranches(remote: string): string[] {
+export function listExternalBranches(remote: string): string[] {
   return run(["branch", "-r"])
     .split("\n")
     .map(l => l.trim())
@@ -168,7 +161,7 @@ export function parseShadowIgnore(scriptDir: string): { patterns: string[] } {
  * Run pre-flight checks before sync.
  * Returns an array of warnings/errors. Callers should abort on "error" level.
  */
-export function preflightChecks(remote: string, teamRef: string): { level: "error" | "warn"; code: string; message: string }[] {
+export function preflightChecks(externalRef: string): { level: "error" | "warn"; code: string; message: string }[] {
   const warnings: { level: "error" | "warn"; code: string; message: string }[] = [];
 
   // 1. Shallow clone detection
@@ -183,7 +176,7 @@ export function preflightChecks(remote: string, teamRef: string): { level: "erro
   }
 
   // 2. Check remote tree for problematic entries
-  const tree = runSafe(["ls-tree", "-r", "--long", teamRef]);
+  const tree = runSafe(["ls-tree", "-r", "--long", externalRef]);
   if (tree.ok && tree.stdout) {
     const entries = tree.stdout.split("\n").filter(Boolean);
     const paths: string[] = [];
@@ -206,7 +199,7 @@ export function preflightChecks(remote: string, teamRef: string): { level: "erro
         warnings.push({
           level: "warn",
           code: "SYMLINK",
-          message: `Remote contains a symlink at '${filePath}'. Symlink targets are not adjusted for the monorepo subdirectory.`,
+          message: `Remote contains a symlink at '${filePath}'. Symlink targets are not adjusted for the local subdirectory.`,
         });
       }
     }
@@ -231,13 +224,13 @@ export function preflightChecks(remote: string, teamRef: string): { level: "erro
   }
 
   // 4. LFS detection
-  const attrs = runSafe(["show", `${teamRef}:.gitattributes`]);
+  const attrs = runSafe(["show", `${externalRef}:.gitattributes`]);
   if (attrs.ok && attrs.stdout.includes("filter=lfs")) {
     warnings.push({
       level: "warn",
       code: "GIT_LFS",
       message: "Remote uses Git LFS. Shadow sync will transfer LFS pointer files, not actual content.\n"
-        + "  Ensure LFS is configured in the monorepo, or large files will be pointers.",
+        + "  Ensure LFS is configured in the internal repo, or large files will be pointers.",
     });
   }
 
@@ -304,14 +297,6 @@ export function shadowBranchName(dir: string, branch: string): string {
   return `${SHADOW_BRANCH_PREFIX}/${dir}/${branch}`;
 }
 
-/** Resolve the URL for a remote from env var SHADOW_REMOTE_{NAME}_URL, falling back to config url. */
-export function resolveRemoteUrl(remoteName: string, configUrl?: string): string | null {
-  const envKey = `SHADOW_REMOTE_${remoteName.toUpperCase().replace(/[^A-Z0-9]/g, "_")}_URL`;
-  const envUrl = process.env[envKey];
-  if (envUrl) return envUrl;
-  if (configUrl) return configUrl;
-  return null;
-}
 
 // ── Lockfile ──────────────────────────────────────────────────────────────────
 
@@ -544,18 +529,17 @@ function findRemoteDefaultBranch(remote: string): string | null {
   return null;
 }
 
-function collectTeamCommits(
-  teamRef: string,
+function collectExternalCommits(
+  externalRef: string,
   opts?: { seedHash?: string; baseRef?: string },
 ): string[] {
   const args = ["log", "--reverse", "--format=%H"];
-  if (SYNC_SINCE) args.push(`--after=${SYNC_SINCE}`);
   if (opts?.seedHash) {
-    args.push(`${opts.seedHash}..${teamRef}`);
+    args.push(`${opts.seedHash}..${externalRef}`);
   } else if (opts?.baseRef) {
-    args.push(`${opts.baseRef}..${teamRef}`);
+    args.push(`${opts.baseRef}..${externalRef}`);
   } else {
-    args.push(teamRef);
+    args.push(externalRef);
   }
   const commits = runSafe(args);
   if (!commits.ok || !commits.stdout) return [];
@@ -574,11 +558,10 @@ function collectTeamCommits(
 export function replayCommits(opts: {
   remote: string;
   dir: string;
-  teamBranch: string;
-  dryRun?: boolean;
+  externalBranch: string;
 }): { mirrored: number; upToDate: boolean } {
-  const { remote, dir, teamBranch, dryRun = false } = opts;
-  const teamRef = `${remote}/${teamBranch}`;
+  const { remote, dir, externalBranch } = opts;
+  const externalRef = `${remote}/${externalBranch}`;
 
   console.log("Scanning local history for already-mirrored commits...");
   const alreadySynced = buildAlreadySyncedSetFor(dir);
@@ -590,16 +573,16 @@ export function replayCommits(opts: {
   }
 
   const defaultBranch = findRemoteDefaultBranch(remote);
-  const isFeatureBranch = defaultBranch != null && teamBranch !== defaultBranch;
+  const isFeatureBranch = defaultBranch != null && externalBranch !== defaultBranch;
   const baseRef = isFeatureBranch ? `${remote}/${defaultBranch}` : undefined;
   if (baseRef) {
-    console.log(`Feature branch detected: collecting only commits in ${baseRef}..${teamRef}`);
+    console.log(`Feature branch detected: collecting only commits in ${baseRef}..${externalRef}`);
   }
 
-  const allTeamCommits = collectTeamCommits(teamRef, { seedHash: seedHash ?? undefined, baseRef });
+  const allExternalCommits = collectExternalCommits(externalRef, { seedHash: seedHash ?? undefined, baseRef });
 
   const newCommits: string[] = [];
-  for (const hash of allTeamCommits) {
+  for (const hash of allExternalCommits) {
     if (alreadySynced.has(hash)) continue;
     newCommits.push(hash);
   }
@@ -609,19 +592,7 @@ export function replayCommits(opts: {
     return { mirrored: 0, upToDate: true };
   }
 
-  console.log(`Found ${newCommits.length} new commit(s) to mirror.`);
-
-  if (dryRun) {
-    console.log("\n[DRY RUN] The following commits would be mirrored:\n");
-    for (const hash of newCommits) {
-      const meta = getCommitMeta(hash);
-      console.log(`  ${meta.short}`);
-    }
-    console.log("\nNo changes were made.");
-    return { mirrored: 0, upToDate: false };
-  }
-
-  console.log();
+  console.log(`Found ${newCommits.length} new commit(s) to mirror.\n`);
 
   for (const hash of newCommits) {
     if (alreadySynced.has(hash)) continue;
@@ -664,7 +635,7 @@ export function replayCommits(opts: {
 
   console.log();
   console.log(
-    `Done. ${newCommits.length} commit(s) from '${remote}/${teamBranch}' mirrored into '${dir}/' on current branch.`
+    `Done. ${newCommits.length} commit(s) from '${remote}/${externalBranch}' mirrored into '${dir}/' on current branch.`
   );
 
   return { mirrored: newCommits.length, upToDate: false };
