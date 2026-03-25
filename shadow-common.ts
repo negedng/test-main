@@ -500,7 +500,7 @@ function buildAlreadySyncedSetFor(dir: string): Set<string> {
 const SEED_HASH_RE = /^Shadow-seed:\s*(\S+)\s+([0-9a-f]{7,40})/;
 
 function findSeedHash(dir: string): string | null {
-  const log = runSafe(["log", `--grep=^${SEED_TRAILER}:`, "--format=%B"]);
+  const log = runSafe(["log", "--all", `--grep=^${SEED_TRAILER}:`, "--format=%B"]);
   if (!log.ok || !log.stdout) return null;
   for (const line of log.stdout.split("\n")) {
     const match = line.match(SEED_HASH_RE);
