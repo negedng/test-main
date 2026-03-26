@@ -61,12 +61,11 @@ for (const { remote, dir, url } of REMOTES) {
       continue;
     }
 
-    // Check out the shadow branch (from origin if it exists, or create new)
+    // Check out the shadow branch (from origin if it exists, or create from main)
     if (refExists(`origin/${shadow}`)) {
       run(["checkout", "-B", shadow, `origin/${shadow}`]);
     } else {
-      // Create orphan-like shadow branch from current HEAD
-      run(["checkout", "-b", shadow]);
+      run(["checkout", "-B", shadow, "origin/main"]);
     }
 
     // Run the per-commit replay
