@@ -97,14 +97,8 @@ if (nonDirFiles.length > 0) {
   }
 }
 
-// Check if there are actual changes to dir/
-const hasStagedChanges = !runSafe(["diff", "--cached", "--quiet"]).ok;
-if (!hasStagedChanges) {
-  console.log("No new changes in shadow branch. Aborting merge.");
-  runSafe(["merge", "--abort"]);
-  process.exit(0);
-}
-
-run(["commit", "--no-edit"]);
+// Commit the merge — even if there are no content changes, the merge
+// ancestry must be recorded so the export pre-flight check passes.
+run(["commit", "--no-edit", "--allow-empty"]);
 
 console.log(`\n\u2713 Done. Merged ${shadowRef} into ${localBranch} (only '${dir}/' was affected).`);
