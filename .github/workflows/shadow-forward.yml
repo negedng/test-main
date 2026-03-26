@@ -34,9 +34,7 @@ jobs:
       # Rewrite external remote URLs to use the PAT for push access.
       # The default GITHUB_TOKEN can only push to this repo, not external ones.
       - name: Configure external remote auth
-        if: ${{ secrets.EXTERNAL_REPO_TOKEN != '' }}
-        run: |
-          git config --global url."https://x-access-token:${{ secrets.EXTERNAL_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        run: git config --global url."https://x-access-token:${{ secrets.EXTERNAL_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Forward to external remote
         run: npx tsx shadow-ci-forward.ts
