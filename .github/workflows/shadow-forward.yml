@@ -26,6 +26,11 @@ jobs:
 
       - run: npm ci
 
+      - name: Configure git identity
+        run: |
+          git config --global user.name "Shadow Sync"
+          git config --global user.email "shadow-sync@users.noreply.github.com"
+
       # Rewrite external remote URLs to use the PAT for push access.
       # The default GITHUB_TOKEN can only push to this repo, not external ones.
       - name: Configure external remote auth
