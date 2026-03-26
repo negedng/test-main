@@ -29,9 +29,13 @@ Three copies of the code:
 ```bash
 npm run pull                    # pull from first configured remote
 npm run pull -- -r frontend     # pull from a specific remote
+npm run pull -- --no-sync       # skip CI sync trigger, just pull current shadow state
 ```
 
-This runs `shadow-pull.ts` which safely merges the shadow branch into your local branch. Only `dir/` files are affected — all other files (scripts, config, tests) are preserved.
+This runs `shadow-pull.ts` which:
+1. Triggers CI sync on GitHub to fetch the latest external changes (requires `EXTERNAL_REPO_TOKEN` — skipped if not set)
+2. Waits ~20 seconds for the sync to complete
+3. Safely merges the shadow branch into your local branch — only `dir/` files are affected, all other files are preserved
 
 **Warning:** Do **not** use a raw `git merge origin/shadow/{dir}/main`. The shadow branch only contains `dir/` files, so a raw merge would delete everything else in your repo.
 
@@ -84,6 +88,7 @@ Requires an `EXTERNAL_REPO_TOKEN` secret (a fine-grained PAT with Contents: Read
 | `-r` | Remote name | First entry in config |
 | `-d` | Local subdirectory | Inferred from remote config |
 | `-b` | Branch | Current local branch |
+| `--no-sync` | Skip triggering CI sync | |
 
 **shadow-export:**
 
@@ -123,7 +128,21 @@ git remote add backend   https://github.com/org/backend.git
 git remote add frontend  https://github.com/org/frontend.git
 ```
 
-3. Create a fine-grained PAT and add it as the `EXTERNAL_REPO_TOKEN` secret in your repo settings (see [PAT setup](shadow-sync-explained.html#pat-setup)).
+3. Create a fine-grained PAT with these permissions:
+   - **Contents: Read and write** on the external repos (for CI forward)
+   - **Actions: Read and write** on the internal repo (for triggering sync from `npm run pull`)
+
+4. Add it as the `EXTERNAL_REPO_TOKEN` secret in your repo settings (for CI forward — see [PAT setup](shadow-sync-explained.html#pat-setup)).
+
+5. Set it locally for `npm run pull` to trigger sync on demand:
+
+```bash
+# Linux/macOS (add to ~/.bashrc or ~/.zshrc)
+export EXTERNAL_REPO_TOKEN=github_pat_...
+
+# PowerShell (add to $PROFILE)
+$env:EXTERNAL_REPO_TOKEN = "github_pat_..."
+```
 
 ## Initial bootstrap
 

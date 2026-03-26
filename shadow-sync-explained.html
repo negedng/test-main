@@ -821,19 +821,20 @@
 <h3 id="fn-pull"><a href="shadow-pull.ts">shadow-pull.ts</a> &mdash; Local Pull Script</h3>
 
 <div class="card">
-  <p><strong>Purpose:</strong> Safely merge the shadow branch into your local working branch so that only <code>dir/</code> files are affected.</p>
-
-  <h4>Why not a plain <code>git merge</code>?</h4>
-  <p>The shadow branch's tree only contains <code>dir/</code> files (the export strips everything else). A plain <code>git merge origin/shadow/frontend/main</code> would tell git that all non-<code>dir/</code> files were "deleted" on the shadow side, causing git to delete your scripts, config, tests, and everything else outside <code>dir/</code>.</p>
+  <p><strong>Purpose:</strong> Sync external changes and safely merge them into your local working branch. Triggers CI sync on GitHub first (if <code>EXTERNAL_REPO_TOKEN</code> is set), then merges the shadow branch so only <code>dir/</code> files are affected.</p>
 
   <h4>How it works:</h4>
   <ol>
+    <li><strong>Trigger CI sync</strong> &mdash; calls the GitHub API to dispatch the Shadow Sync workflow (external &rarr; shadow). Waits ~20 seconds for it to complete. Skipped if <code>EXTERNAL_REPO_TOKEN</code> is not set or <code>--no-sync</code> is passed.</li>
     <li><strong>Fetch</strong> the latest shadow branch from origin</li>
     <li><strong>Check if up to date</strong> &mdash; if shadow is already an ancestor of HEAD, nothing to do</li>
     <li><strong>Merge with <code>--no-commit</code></strong> &mdash; merges the shadow branch but stops before committing, so we can fix the index</li>
     <li><strong>Restore non-<code>dir/</code> files</strong> &mdash; checks out all files outside <code>dir/</code> from HEAD, undoing the "deletions" from the shadow tree</li>
     <li><strong>Commit</strong> &mdash; the merge commit has correct ancestry and only <code>dir/</code> files were changed</li>
   </ol>
+
+  <h4>Why not a plain <code>git merge</code>?</h4>
+  <p>The shadow branch's tree only contains <code>dir/</code> files (the export strips everything else). A plain <code>git merge origin/shadow/frontend/main</code> would tell git that all non-<code>dir/</code> files were "deleted" on the shadow side, causing git to delete your scripts, config, tests, and everything else outside <code>dir/</code>.</p>
 </div>
 
 <div class="card card-red">
@@ -926,6 +927,11 @@
   </ol>
   <p><strong>Error handling:</strong> If one branch fails, it logs the error, resets any partial state, and continues with the next branch. Only fails at the end if any syncs failed.</p>
   <p><strong>New branches:</strong> If a new branch appears on the external remote, CI sync automatically discovers it (via <a href="#fn-listExternalBranches"><code>listExternalBranches</code></a>) and creates a new shadow branch for it.</p>
+</div>
+
+<div class="card card-red">
+  <h4>CI only &mdash; do not run locally</h4>
+  <p>This script uses <code>git checkout</code> to switch between shadow branches in the working tree. In CI this is safe because the runner starts clean and is discarded afterward. <strong>Running it locally will switch your checkout away from your working branch</strong>, and any untracked or modified files that conflict with the shadow branch will cause errors or be overwritten. If you need to trigger a sync manually, use the GitHub Actions <em>workflow_dispatch</em> trigger (the "Run workflow" button in the Actions tab) rather than running the script directly.</p>
 </div>
 
 <hr>
@@ -1086,12 +1092,13 @@
 <h2 id="cli">11. Command-Line Options</h2>
 
 <h3>shadow-pull.ts</h3>
-<pre><code>npm run pull -- [-r remote] [-d dir] [-b branch]</code></pre>
+<pre><code>npm run pull -- [-r remote] [-d dir] [-b branch] [--no-sync]</code></pre>
 <table>
   <tr><th>Flag</th><th>Long</th><th>Description</th><th>Default</th></tr>
   <tr><td><code>-r</code></td><td><code>--remote</code></td><td>Remote name (selects config entry)</td><td>First entry in config</td></tr>
   <tr><td><code>-d</code></td><td><code>--dir</code></td><td>Local subdirectory</td><td>Inferred from remote config</td></tr>
   <tr><td><code>-b</code></td><td><code>--branch</code></td><td>Branch</td><td>Your current local branch</td></tr>
+  <tr><td></td><td><code>--no-sync</code></td><td>Skip triggering CI sync (just pull current shadow state)</td><td>Off</td></tr>
   <tr><td><code>-h</code></td><td><code>--help</code></td><td>Show usage help</td><td>&mdash;</td></tr>
 </table>
 
@@ -1140,9 +1147,15 @@
       </table>
     </li>
     <li>Under <strong>Permissions &rarr; Repository permissions</strong>, set:
+      <p>On the <strong>external repos</strong> (e.g. <code>test-frontend</code>, <code>test-backend</code>):</p>
       <table>
         <tr><th>Permission</th><th>Level</th><th>Why</th></tr>
-        <tr><td>Contents</td><td><strong>Read and write</strong></td><td>Needed to push commits to the external repo</td></tr>
+        <tr><td>Contents</td><td><strong>Read and write</strong></td><td>Needed to push commits to the external repo (CI forward)</td></tr>
+      </table>
+      <p>On the <strong>internal repo</strong> (e.g. <code>test-main</code>):</p>
+      <table>
+        <tr><th>Permission</th><th>Level</th><th>Why</th></tr>
+        <tr><td>Actions</td><td><strong>Read and write</strong></td><td>Needed to trigger the sync workflow from <code>npm run pull</code></td></tr>
       </table>
       Leave everything else at "No access."
     </li>
@@ -1168,7 +1181,19 @@
   <p>The forward workflow (<code>shadow-forward.yml</code>) is already configured to use this secret. It rewrites all <code>https://github.com/</code> URLs to include the token, so <code>git push</code> to external remotes authenticates automatically.</p>
 </div>
 
-<h3>Step 3: Verify It Works</h3>
+<h3>Step 3: Set the Token Locally</h3>
+
+<div class="card">
+  <p>The same token is used by <code>npm run pull</code> to trigger CI sync on demand. Set it as an environment variable:</p>
+  <pre><code># Linux/macOS (add to ~/.bashrc or ~/.zshrc)
+export EXTERNAL_REPO_TOKEN=github_pat_...
+
+# PowerShell (add to $PROFILE)
+$env:EXTERNAL_REPO_TOKEN = "github_pat_..."</code></pre>
+  <p>If not set, <code>npm run pull</code> still works &mdash; it just skips the sync trigger and pulls whatever the shadow branch currently has.</p>
+</div>
+
+<h3>Step 4: Verify It Works</h3>
 
 <div class="card">
   <ol>
