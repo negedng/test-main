@@ -1,12 +1,8 @@
 #!/usr/bin/env ts-node
 /**
- * shadow-export.ts — Export local subdirectory changes to a shadow branch
- * using a real git merge, filtering out files matched by .shadowignore.
- *
- * Creates a proper merge commit on the shadow branch with ancestry to
- * your working branch. The commit tree only contains files under dir/,
- * excluding .shadowignore patterns — so ignored files never appear in
- * the shadow branch history.
+ * shadow-export.ts — Merge local changes into the shadow branch,
+ * filtering out .shadowignore files. Creates a proper merge commit
+ * so the shadow branch has real ancestry back to your working branch.
  *
  * Usage:
  *   npx tsx shadow-export.ts -m "Add login page"
@@ -54,13 +50,11 @@ const commitMsg = values.message;
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
-const SCRIPT_DIR = path.dirname(
-  typeof __filename !== "undefined"
-    ? __filename
-    : new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"),
-);
-const localBranch = getCurrentBranch();
+const SCRIPT_DIR = typeof __dirname !== "undefined"
+  ? __dirname
+  : path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
 
+const localBranch = getCurrentBranch();
 const remoteEntry = values.remote
   ? REMOTES.find(r => r.remote === values.remote)
   : REMOTES[0];
@@ -93,8 +87,7 @@ acquireLock(SCRIPT_DIR, "shadow-export");
 console.log(`Remote        : ${remote}`);
 console.log(`Local dir     : ${dir}/`);
 console.log(`Local branch  : ${localBranch}`);
-console.log(`Shadow branch : ${shadowBranch}`);
-console.log();
+console.log(`Shadow branch : ${shadowBranch}\n`);
 
 // ── .shadowignore ─────────────────────────────────────────────────────────────
 
@@ -130,82 +123,43 @@ process.on("SIGTERM", () => { cleanup(); process.exit(143); });
 run(["worktree", "add", "-b", tempBranch, worktreeDir, shadowRef]);
 
 // ── Merge ─────────────────────────────────────────────────────────────────────
-//
-// Merge HEAD into the shadow branch with --no-commit so we can clean the
-// index before committing.  -X theirs prefers our local (HEAD) changes on
-// content conflicts.  The resulting commit is a real merge (two parents)
-// but its tree never contains non-dir/ files or shadowignored files.
+// Merge HEAD into shadow with --no-commit so we can clean the index.
+// -X theirs prefers local (HEAD) on conflict.  --allow-unrelated-histories
+// is harmless when histories are related and avoids a retry path.
 
 const headCommit = run(["rev-parse", "HEAD"]);
 console.log(`Merging ${localBranch} (${headCommit.slice(0, 10)}) into shadow branch...`);
 
-let mergeResult = runSafe(
-  ["merge", "--no-commit", "--no-ff", "-X", "theirs", headCommit],
+const mergeResult = runSafe(
+  ["merge", "--no-commit", "--no-ff", "-X", "theirs", "--allow-unrelated-histories", headCommit],
   worktreeDir,
 );
 
-if (!mergeResult.ok && mergeResult.stderr.includes("unrelated histories")) {
-  console.log("  Histories are unrelated, retrying with --allow-unrelated-histories...");
-  runSafe(["merge", "--abort"], worktreeDir);
-  mergeResult = runSafe(
-    ["merge", "--no-commit", "--no-ff", "-X", "theirs", "--allow-unrelated-histories", headCommit],
-    worktreeDir,
-  );
-}
-
-if (!mergeResult.ok) {
-  // MERGE_HEAD should still exist — -X theirs resolves content conflicts,
-  // but tree conflicts (modify/delete, rename/rename) may remain.
-  if (!runSafe(["rev-parse", "MERGE_HEAD"], worktreeDir).ok) {
-    console.error(mergeResult.stderr);
-    die("Merge failed. Resolve conflicts manually and retry.");
-  }
-
-  // Auto-resolve any remaining tree conflicts in favour of HEAD (theirs)
-  const unmerged = runSafe(["diff", "--name-only", "--diff-filter=U"], worktreeDir);
-  if (unmerged.ok && unmerged.stdout) {
-    for (const f of unmerged.stdout.split("\n").filter(Boolean)) {
-      const co = runSafe(["checkout", "--theirs", "--", f], worktreeDir);
-      if (co.ok) {
-        run(["add", "--", f], worktreeDir);
-      } else {
-        // File was deleted on theirs side — accept the deletion
-        runSafe(["rm", "--", f], worktreeDir);
-      }
-    }
-  }
+if (!mergeResult.ok && !runSafe(["rev-parse", "MERGE_HEAD"], worktreeDir).ok) {
+  console.error(mergeResult.stderr);
+  die("Merge failed. Resolve conflicts manually and retry.");
 }
 
 // ── Clean index ───────────────────────────────────────────────────────────────
-//
-// The merge brought in everything from HEAD (all dirs, config, scripts…).
-// Strip the index back to only dir/ files, minus shadowignored patterns.
-// Because MERGE_HEAD is still present, the eventual commit will record
-// both parents — giving us real merge ancestry with a clean tree.
+// Strip to only dir/ files minus shadowignored patterns.
+// MERGE_HEAD is still present so the commit will record both parents.
 
 console.log(`Cleaning index (removing files outside '${dir}/' and shadowignored files)...`);
 
 const allIndexed = run(["ls-files"], worktreeDir).split("\n").filter(Boolean);
 
-// Remove anything not under dir/
 const nonDirFiles = allIndexed.filter(f => !f.startsWith(`${dir}/`));
 for (let i = 0; i < nonDirFiles.length; i += 100) {
-  const batch = nonDirFiles.slice(i, i + 100);
-  runSafe(["rm", "--cached", "-f", "--", ...batch], worktreeDir);
+  runSafe(["rm", "--cached", "-f", "--", ...nonDirFiles.slice(i, i + 100)], worktreeDir);
 }
 
-// Remove shadowignored files under dir/
 if (ignorePatterns.length > 0) {
   const compiled = ignorePatterns.map(globToRegex);
-  const dirFiles = run(["ls-files", "--", `${dir}/`], worktreeDir)
-    .split("\n").filter(Boolean);
-  const ignoredFiles = dirFiles.filter(f => {
-    const rel = f.slice(dir.length + 1);
-    return compiled.some(re => re.test(rel));
-  });
+  const ignoredFiles = run(["ls-files", "--", `${dir}/`], worktreeDir)
+    .split("\n").filter(Boolean)
+    .filter(f => compiled.some(re => re.test(f.slice(dir.length + 1))));
   for (let i = 0; i < ignoredFiles.length; i += 100) {
-    const batch = ignoredFiles.slice(i, i + 100);
-    runSafe(["rm", "--cached", "-f", "--", ...batch], worktreeDir);
+    runSafe(["rm", "--cached", "-f", "--", ...ignoredFiles.slice(i, i + 100)], worktreeDir);
   }
 }
 
@@ -229,9 +183,7 @@ if (dryRun) {
 }
 
 const commitResult = spawnSync("git", ["-c", "core.autocrlf=false", "commit", "-m", commitMsg], {
-  cwd: worktreeDir,
-  encoding: "utf8",
-  stdio: "inherit",
+  cwd: worktreeDir, encoding: "utf8", stdio: "inherit",
 });
 if (commitResult.error) die(`Failed to spawn git: ${commitResult.error.message}`);
 if (commitResult.status !== 0) die("git commit failed in worktree.");
@@ -241,62 +193,30 @@ console.log(`Pushing to ${pushOrigin}/${shadowBranch}...`);
 for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
   const pushResult = runSafe(["push", pushOrigin, `HEAD:${shadowBranch}`], worktreeDir);
   if (pushResult.ok) break;
-  const isNonFF = pushResult.stderr.includes("non-fast-forward")
-    || pushResult.stderr.includes("rejected")
-    || pushResult.stderr.includes("fetch first");
+  const isNonFF = /non-fast-forward|rejected|fetch first/.test(pushResult.stderr);
   if (!isNonFF || attempt === MAX_PUSH_RETRIES) {
     console.error(pushResult.stderr);
     die(`git push failed after ${attempt} attempt(s).`);
   }
   console.log(`  Push rejected (non-fast-forward), retrying (${attempt}/${MAX_PUSH_RETRIES})...`);
   run(["fetch", pushOrigin]);
-  if (refExists(`${pushOrigin}/${shadowBranch}`)) {
-    const updatedRef = run(["rev-parse", `${pushOrigin}/${shadowBranch}`]);
-    const rebaseResult = runSafe(["rebase", updatedRef], worktreeDir);
-    if (!rebaseResult.ok) {
-      die("Rebase onto updated shadow branch failed. Resolve manually and retry.");
-    }
+  const updatedRef = run(["rev-parse", `${pushOrigin}/${shadowBranch}`]);
+  if (!runSafe(["rebase", updatedRef], worktreeDir).ok) {
+    die("Rebase onto updated shadow branch failed. Resolve manually and retry.");
   }
 }
 
 cleanup();
-
-console.log();
-console.log(`\u2713 Done. Exported '${dir}/' \u2192 ${pushOrigin}/${shadowBranch} as: "${commitMsg}"`);
+console.log(`\n\u2713 Done. Exported '${dir}/' \u2192 ${pushOrigin}/${shadowBranch} as: "${commitMsg}"`);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function globToRegex(pattern: string): RegExp {
-  let re = "";
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === "*" && pattern[i + 1] === "*") {
-      re += ".*";
-      i += 2;
-      if (pattern[i] === "/") i++;
-    } else if (ch === "*") {
-      re += "[^/]*";
-      i++;
-    } else if (ch === "?") {
-      re += "[^/]";
-      i++;
-    } else if (ch === "[") {
-      const close = pattern.indexOf("]", i + 1);
-      if (close !== -1) {
-        re += pattern.slice(i, close + 1);
-        i = close + 1;
-      } else {
-        re += "\\[";
-        i++;
-      }
-    } else if (".+^${}()|\\".includes(ch)) {
-      re += "\\" + ch;
-      i++;
-    } else {
-      re += ch;
-      i++;
-    }
-  }
+  const re = pattern
+    .replace(/\*\*\/?/g, '\0')       // ** or **/ → placeholder
+    .replace(/[.+^${}()|\\]/g, '\\$&') // escape regex specials
+    .replace(/\*/g, '[^/]*')          // * → any non-slash
+    .replace(/\?/g, '[^/]')           // ? → single non-slash
+    .replace(/\0/g, '.*');            // placeholder → any path
   return new RegExp(`^${re}$`);
 }
