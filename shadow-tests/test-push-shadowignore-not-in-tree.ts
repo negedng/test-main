@@ -1,7 +1,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import { createTestEnv, commitOnLocal, runPush, readShadowFile } from "./harness";
+import { createTestEnv, commitOnLocal, mergeShadow, runPush, readShadowFile } from "./harness";
 import { assertEqual } from "./assert";
 
 function git(cmd: string, cwd: string): string {
@@ -48,6 +48,9 @@ export default function run() {
       "export const app = true;\n",
       "app.ts should be on shadow branch",
     );
+
+    // Merge shadow back so the pre-flight check passes for the next export
+    mergeShadow(env);
 
     // Make another export to create multiple commits
     commitOnLocal(env, { "utils.ts": "export const util = true;\n" }, "Add utils.ts");

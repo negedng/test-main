@@ -78,6 +78,9 @@ export function createTestEnv(name: string, subdir = "frontend"): TestEnv {
   git('commit --allow-empty -m "Initialize shadow branch"', localRepo);
   git(`push origin HEAD:${shadowBranch}`, localRepo);
   git("checkout main", localRepo);
+  // Merge shadow into local so export's pre-flight check passes
+  // (export refuses if shadow has commits not in HEAD)
+  git(`merge origin/${shadowBranch} --allow-unrelated-histories --no-edit`, localRepo);
 
   // Copy shadow scripts and config into local repo so they run from there
   const scriptDir = path.resolve(__dirname, "..");
@@ -129,6 +132,7 @@ export function addRemote(env: TestEnv, remoteName: string, subdir: string): Rem
   git('commit --allow-empty -m "Initialize shadow branch"', env.localRepo);
   git(`push origin HEAD:${shadowBranch}`, env.localRepo);
   git("checkout main", env.localRepo);
+  git(`merge origin/${shadowBranch} --allow-unrelated-histories --no-edit`, env.localRepo);
 
   const info: RemoteInfo = { remoteName, subdir, remoteBare, remoteWorking };
   env.remotes.push(info);

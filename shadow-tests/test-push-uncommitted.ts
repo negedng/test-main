@@ -78,6 +78,9 @@ export default function run() {
     git('commit -m "Commit the WIP edit"', env.localRepo);
     fs.unlinkSync(untrackedPath);
 
+    // Merge shadow back (previous export added a commit the pre-flight check requires)
+    mergeShadow(env);
+
     const r5 = runPush(env, "Push after committing");
     assertEqual(r5.status, 0, "push should succeed after committing changes");
 

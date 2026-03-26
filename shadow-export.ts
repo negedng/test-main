@@ -35,14 +35,14 @@ const { values } = parseArgs({
   strict: true,
 });
 
-if (values.help || !values.message) {
-  console.log('Usage: shadow-export.ts -m "Your commit message" [-r remote] [-d dir] [-b branch] [-n]');
-  console.log("  -m  Commit message (required)");
+if (values.help) {
+  console.log('Usage: shadow-export.ts [-m "commit message"] [-r remote] [-d dir] [-b branch] [-n]');
+  console.log("  -m  Commit message                        (default: git's merge commit message)");
   console.log("  -r  Remote name (selects config entry)    (default: first entry in REMOTES)");
   console.log("  -d  Local subdirectory to export from     (default: same as remote name)");
   console.log("  -b  Target branch                         (default: your current branch)");
   console.log("  -n  Dry run — show what would change without pushing");
-  process.exit(values.help ? 0 : 1);
+  process.exit(0);
 }
 
 const dryRun = values["dry-run"] ?? false;
@@ -100,6 +100,17 @@ run(["fetch", pushOrigin]);
 
 if (!refExists(shadowRef)) {
   die(`Shadow branch '${shadowRef}' does not exist. Run shadow-setup.ts first.`);
+}
+
+// Refuse to export if the shadow branch has changes not merged into HEAD.
+// This catches external commits (synced via CI) that the user hasn't pulled yet.
+if (!runSafe(["merge-base", "--is-ancestor", shadowRef, "HEAD"]).ok) {
+  console.error(`\u2718 '${shadowRef}' has commits not merged into your local branch.\n`);
+  console.error(`Merge them first:`);
+  console.error(`  git fetch ${pushOrigin}`);
+  console.error(`  git merge ${shadowRef}\n`);
+  console.error(`Then re-run the export.`);
+  process.exit(1);
 }
 
 // ── Worktree ──────────────────────────────────────────────────────────────────
@@ -182,7 +193,8 @@ if (dryRun) {
   process.exit(0);
 }
 
-const commitResult = spawnSync("git", ["-c", "core.autocrlf=false", "commit", "-m", commitMsg], {
+const commitArgs = ["-c", "core.autocrlf=false", "commit", ...(commitMsg ? ["-m", commitMsg] : [])];
+const commitResult = spawnSync("git", commitArgs, {
   cwd: worktreeDir, encoding: "utf8", stdio: "inherit",
 });
 if (commitResult.error) die(`Failed to spawn git: ${commitResult.error.message}`);
@@ -207,7 +219,7 @@ for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
 }
 
 cleanup();
-console.log(`\n\u2713 Done. Exported '${dir}/' \u2192 ${pushOrigin}/${shadowBranch} as: "${commitMsg}"`);
+console.log(`\n\u2713 Done. Exported '${dir}/' \u2192 ${pushOrigin}/${shadowBranch}`);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
