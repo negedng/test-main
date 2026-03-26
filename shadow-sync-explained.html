@@ -390,7 +390,8 @@
   </div>
   <div class="flow-step">
     <div class="flow-num">6</div>
-    <div><strong>You merge locally.</strong> Run <code>git fetch origin</code> then <code>git merge origin/shadow/backend/main</code> to get the external changes into your working branch. This is a standard git merge.</div>
+    <div><strong>You pull locally.</strong> Run <code>npm run pull</code> (or <code>npm run pull -- -r backend</code>) to merge external changes into your working branch. This uses <a href="#fn-pull"><code>shadow-pull.ts</code></a> which merges the shadow branch but restores non-<code>dir/</code> files so only <code>backend/</code> is affected.
+    <p style="margin-top:0.5rem"><strong>Warning:</strong> Do <strong>not</strong> use a plain <code>git merge origin/shadow/backend/main</code> &mdash; the shadow branch's tree only contains <code>backend/</code> files, so a raw merge would delete all your other files (scripts, config, tests, etc.).</p></div>
   </div>
 </div>
 
@@ -437,6 +438,11 @@
   <tr>
     <td><a href="shadow-setup.ts"><code>shadow-setup.ts</code></a></td>
     <td>One-time bootstrap: records a seed commit so CI sync skips existing history (<a href="#fn-setup">details</a>)</td>
+    <td><span class="tag tag-green">Local</span></td>
+  </tr>
+  <tr>
+    <td><a href="shadow-pull.ts"><code>shadow-pull.ts</code></a></td>
+    <td>Safely merges shadow branch into your local branch, only affecting <code>dir/</code> files (<a href="#fn-pull">details</a>)</td>
     <td><span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
@@ -588,8 +594,9 @@
     <p><strong>Trigger:</strong> Push to any <code>shadow/**</code> branch</p>
     <p><strong>What it does:</strong></p>
     <ol>
-      <li>Checks out repo with full history</li>
+      <li>Checks out repo with full history and <code>persist-credentials: false</code> (disables the default credential helper so the PAT is used instead)</li>
       <li>Installs Node.js 20 and runs <code>npm ci</code></li>
+      <li>Configures git identity (<code>Shadow Sync</code>) and rewrites GitHub HTTPS URLs to use the PAT</li>
       <li>Runs <code>shadow-ci-forward.ts</code> (reads remote URLs from <code>shadow-config.json</code>)</li>
     </ol>
     <p><strong>Concurrency:</strong> Per-ref group (each shadow branch gets its own queue)</p>
@@ -811,6 +818,31 @@
 
 <hr>
 
+<h3 id="fn-pull"><a href="shadow-pull.ts">shadow-pull.ts</a> &mdash; Local Pull Script</h3>
+
+<div class="card">
+  <p><strong>Purpose:</strong> Safely merge the shadow branch into your local working branch so that only <code>dir/</code> files are affected.</p>
+
+  <h4>Why not a plain <code>git merge</code>?</h4>
+  <p>The shadow branch's tree only contains <code>dir/</code> files (the export strips everything else). A plain <code>git merge origin/shadow/frontend/main</code> would tell git that all non-<code>dir/</code> files were "deleted" on the shadow side, causing git to delete your scripts, config, tests, and everything else outside <code>dir/</code>.</p>
+
+  <h4>How it works:</h4>
+  <ol>
+    <li><strong>Fetch</strong> the latest shadow branch from origin</li>
+    <li><strong>Check if up to date</strong> &mdash; if shadow is already an ancestor of HEAD, nothing to do</li>
+    <li><strong>Merge with <code>--no-commit</code></strong> &mdash; merges the shadow branch but stops before committing, so we can fix the index</li>
+    <li><strong>Restore non-<code>dir/</code> files</strong> &mdash; checks out all files outside <code>dir/</code> from HEAD, undoing the "deletions" from the shadow tree</li>
+    <li><strong>Commit</strong> &mdash; the merge commit has correct ancestry and only <code>dir/</code> files were changed</li>
+  </ol>
+</div>
+
+<div class="card card-red">
+  <h4>Always use <code>npm run pull</code>, never raw <code>git merge</code></h4>
+  <p>This is critical. A raw <code>git merge origin/shadow/{dir}/main</code> <strong>will delete your files</strong>. The pull script exists specifically to prevent this. If you accidentally run a raw merge, restore with <code>git checkout origin/main -- .</code> and recommit.</p>
+</div>
+
+<hr>
+
 <h3 id="fn-export"><a href="shadow-export.ts">shadow-export.ts</a> &mdash; Local Export Script</h3>
 
 <div class="card">
@@ -910,10 +942,15 @@
     <li>Extracts files under <code>{dir}/</code> from the shadow branch, <strong>stripping the directory prefix</strong> (e.g. <code>backend/src/app.ts</code> becomes <code>src/app.ts</code>)</li>
     <li>Creates a worktree from the external remote's branch</li>
     <li>Syncs files (adds new, removes deleted)</li>
-    <li>Commits using the same message from the shadow branch commit</li>
-    <li>Pushes to the external remote</li>
+    <li>Commits using the shadow branch's message, tagged with a <code>Shadow-forwarded-from: {hash}</code> trailer so CI sync recognizes it as a round-trip commit and skips it on pull-back</li>
+    <li>Pushes to the external remote (requires <code>EXTERNAL_REPO_TOKEN</code> PAT)</li>
   </ol>
-  <p><strong>Key detail:</strong> No filtering happens here. <code>.shadowignore</code> was already applied during export. The forward step is a faithful copy.</p>
+  <p><strong>Key details:</strong></p>
+  <ul>
+    <li>No filtering happens here &mdash; <code>.shadowignore</code> was already applied during export</li>
+    <li>The <code>Shadow-forwarded-from</code> trailer prevents round-trip duplicates: when CI sync pulls from external, it skips commits that originated from us</li>
+    <li>The export preserves CI dependencies on the shadow branch (<code>.github/workflows/</code>, <code>package.json</code>, <code>shadow-ci-forward.ts</code>, <code>shadow-common.ts</code>, <code>shadow-config.json</code>) so the forward workflow can run</li>
+  </ul>
 </div>
 
 <!-- ================================================================ -->
@@ -963,7 +1000,7 @@
 <h2 id="testing">10. Test Suite</h2>
 
 <div class="card">
-  <p>The test suite lives in <code>shadow-tests/</code> with 33 test files. Run with <code>npm test</code>.</p>
+  <p>The test suite lives in <code>shadow-tests/</code> with 34 test files. Run with <code>npm test</code>.</p>
 
   <h4>How tests work:</h4>
   <ol>
@@ -1015,6 +1052,7 @@
       <li><code>test-push-merge-ancestry</code> &mdash; the export commit has exactly 2 parents: the shadow branch tip and HEAD</li>
       <li><code>test-push-merge-with-external-changes</code> &mdash; external changes survive export; export refuses when shadow has unmerged commits, succeeds after merging</li>
       <li><code>test-push-shadowignore-not-in-tree</code> &mdash; walks every commit on the shadow branch and confirms ignored files never appear in any tree</li>
+      <li><code>test-push-merge-preserves-non-dir</code> &mdash; after export + CI sync + shadow pull, non-dir files (mono.txt, scripts, config) survive intact</li>
     </ul>
     <h4>Multi-remote tests</h4>
     <ul>
@@ -1046,6 +1084,16 @@
 
 <!-- ================================================================ -->
 <h2 id="cli">11. Command-Line Options</h2>
+
+<h3>shadow-pull.ts</h3>
+<pre><code>npm run pull -- [-r remote] [-d dir] [-b branch]</code></pre>
+<table>
+  <tr><th>Flag</th><th>Long</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>-r</code></td><td><code>--remote</code></td><td>Remote name (selects config entry)</td><td>First entry in config</td></tr>
+  <tr><td><code>-d</code></td><td><code>--dir</code></td><td>Local subdirectory</td><td>Inferred from remote config</td></tr>
+  <tr><td><code>-b</code></td><td><code>--branch</code></td><td>Branch</td><td>Your current local branch</td></tr>
+  <tr><td><code>-h</code></td><td><code>--help</code></td><td>Show usage help</td><td>&mdash;</td></tr>
+</table>
 
 <h3>shadow-export.ts</h3>
 <pre><code>npm run export -- [-m "commit message"] [-r remote] [-d dir] [-b branch] [-n]</code></pre>
