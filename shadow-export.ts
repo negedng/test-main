@@ -159,7 +159,11 @@ console.log(`Cleaning index (removing files outside '${dir}/' and shadowignored 
 
 const allIndexed = run(["ls-files"], worktreeDir).split("\n").filter(Boolean);
 
-const nonDirFiles = allIndexed.filter(f => !f.startsWith(`${dir}/`));
+// Keep .github/workflows/ so push-triggered workflows (like shadow-forward)
+// can fire — GitHub reads workflow files from the pushed branch, not main.
+const nonDirFiles = allIndexed.filter(f =>
+  !f.startsWith(`${dir}/`) && !f.startsWith(".github/workflows/")
+);
 for (let i = 0; i < nonDirFiles.length; i += 100) {
   runSafe(["rm", "--cached", "-f", "--", ...nonDirFiles.slice(i, i + 100)], worktreeDir);
 }
