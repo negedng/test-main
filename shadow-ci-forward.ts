@@ -81,7 +81,7 @@ const externalExists = refExists(externalRef);
 
 // Create a worktree from the external remote branch
 const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), "shadow-forward-")).replace(/\\/g, "/");
-const archiveDir  = fs.mkdtempSync(path.join(os.tmpdir(), "shadow-archive-")).replace(/\\/g, "/");
+const archiveDir = fs.mkdtempSync(path.join(os.tmpdir(), "shadow-archive-")).replace(/\\/g, "/");
 const tempBranch = `shadow-forward-${Date.now()}`;
 let cleanupDone = false;
 
@@ -91,11 +91,11 @@ const cleanup = () => {
   runSafe(["worktree", "remove", "--force", worktreeDir]);
   runSafe(["branch", "-D", tempBranch]);
   fs.rmSync(worktreeDir, { recursive: true, force: true });
-  fs.rmSync(archiveDir,  { recursive: true, force: true });
+  fs.rmSync(archiveDir, { recursive: true, force: true });
 };
 
-process.on("exit",    cleanup);
-process.on("SIGINT",  () => { cleanup(); process.exit(130); });
+process.on("exit", cleanup);
+process.on("SIGINT", () => { cleanup(); process.exit(130); });
 process.on("SIGTERM", () => { cleanup(); process.exit(143); });
 
 // Extract {dir}/ content from shadow branch, stripping the prefix

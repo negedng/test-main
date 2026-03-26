@@ -32,7 +32,7 @@ export default function run() {
     // CI sync should process both main and feature/range-test
     const r = runCiSync(env);
     assertEqual(r.status, 0, "ci-sync should succeed");
-    assertIncludes(r.stdout, "Feature branch detected", "should detect feature branch");
+    assertIncludes(r.stdout, "Mirrored", "should mirror feature branch commits");
 
     // Feature shadow branch should have feature files but not main-only files
     git("fetch origin", env.localRepo);

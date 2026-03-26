@@ -1,11 +1,12 @@
 #!/usr/bin/env ts-node
 /**
- * shadow-export.ts — Export local subdirectory changes to a shadow branch,
- * filtering out files matched by .shadowignore.
+ * shadow-export.ts — Export local subdirectory changes to a shadow branch
+ * using a real git merge, filtering out files matched by .shadowignore.
  *
- * This is the local step for pushing changes to an external team repo.
- * The CI forward workflow (shadow-ci-forward.ts) handles the actual push
- * to the external remote.
+ * Creates a proper merge commit on the shadow branch with ancestry to
+ * your working branch. The commit tree only contains files under dir/,
+ * excluding .shadowignore patterns — so ignored files never appear in
+ * the shadow branch history.
  *
  * Usage:
  *   npx tsx shadow-export.ts -m "Add login page"
@@ -18,7 +19,7 @@ import * as fs from "fs";
 import * as os from "os";
 import { spawnSync } from "child_process";
 import {
-  REMOTES, MAX_DIR_DEPTH, MAX_PUSH_RETRIES,
+  REMOTES, MAX_PUSH_RETRIES,
   run, runSafe, refExists,
   getCurrentBranch, shadowBranchName,
   parseShadowIgnore, acquireLock, validateName, die,
@@ -74,7 +75,6 @@ const externalBranch = values.branch ?? localBranch;
 validateName(remote, "Remote name");
 validateName(dir, "Directory");
 const shadowBranch = shadowBranchName(dir, externalBranch);
-// Configurable via env var for testing.
 const pushOrigin   = process.env.SHADOW_PUSH_ORIGIN ?? "origin";
 const shadowRef    = `${pushOrigin}/${shadowBranch}`;
 
@@ -82,7 +82,7 @@ const shadowRef    = `${pushOrigin}/${shadowBranch}`;
 const dirtyStaged   = !runSafe(["diff", "--cached", "--quiet", "--", `${dir}/`]).ok;
 const dirtyUnstaged = !runSafe(["diff", "--quiet", "HEAD", "--", `${dir}/`]).ok;
 if (dirtyStaged || dirtyUnstaged) {
-  console.error(`✘ '${dir}/' has uncommitted changes:\n`);
+  console.error(`\u2718 '${dir}/' has uncommitted changes:\n`);
   spawnSync("git", ["-c", "core.autocrlf=false", "status", "--short", "--", `${dir}/`], { stdio: "inherit" });
   console.error(`\nCommit or stash them before running shadow-export.`);
   process.exit(1);
@@ -98,7 +98,7 @@ console.log();
 
 // ── .shadowignore ─────────────────────────────────────────────────────────────
 
-const ignore = parseShadowIgnore(SCRIPT_DIR);
+const ignorePatterns = parseShadowIgnore(SCRIPT_DIR);
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
@@ -112,7 +112,6 @@ if (!refExists(shadowRef)) {
 // ── Worktree ──────────────────────────────────────────────────────────────────
 
 const worktreeDir = fs.mkdtempSync(path.join(os.tmpdir(), "shadow-export-")).replace(/\\/g, "/");
-const archiveDir  = fs.mkdtempSync(path.join(os.tmpdir(), "shadow-archive-")).replace(/\\/g, "/");
 const tempBranch  = `shadow-export-${Date.now()}`;
 let   cleanupDone = false;
 
@@ -122,45 +121,95 @@ const cleanup = () => {
   runSafe(["worktree", "remove", "--force", worktreeDir]);
   runSafe(["branch", "-D", tempBranch]);
   fs.rmSync(worktreeDir, { recursive: true, force: true });
-  fs.rmSync(archiveDir,  { recursive: true, force: true });
 };
 
 process.on("exit",    cleanup);
 process.on("SIGINT",  () => { cleanup(); process.exit(130); });
 process.on("SIGTERM", () => { cleanup(); process.exit(143); });
 
-console.log(`Extracting committed '${dir}/' from HEAD (applying .shadowignore)...`);
-
-const trackedFiles = run(["ls-tree", "-r", "--name-only", "HEAD", "--", `${dir}/`])
-  .split("\n")
-  .filter(Boolean);
-
-for (const filePath of trackedFiles) {
-  // filePath is e.g. "backend/README.md" — strip dir prefix for ignore check
-  const rel = filePath.slice(dir.length + 1);
-  if (ignore.patterns.some(p => rel.match(globToRegex(p)))) continue;
-
-  const destPath = path.join(archiveDir, filePath);
-  fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  const gitPath = filePath.replace(/\\/g, "/");
-  const result = spawnSync("git", ["-c", "core.autocrlf=false", "show", `HEAD:${gitPath}`], {
-    maxBuffer: 50 * 1024 * 1024,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  if (result.error) die(`Failed to spawn git: ${result.error.message}`);
-  if (result.status !== 0) die(`Failed to extract ${gitPath} from HEAD`);
-  fs.writeFileSync(destPath, result.stdout);
-}
-
 run(["worktree", "add", "-b", tempBranch, worktreeDir, shadowRef]);
 
-console.log(`Syncing into temporary worktree...`);
+// ── Merge ─────────────────────────────────────────────────────────────────────
+//
+// Merge HEAD into the shadow branch with --no-commit so we can clean the
+// index before committing.  -X theirs prefers our local (HEAD) changes on
+// content conflicts.  The resulting commit is a real merge (two parents)
+// but its tree never contains non-dir/ files or shadowignored files.
 
-syncDirs(archiveDir, worktreeDir, dir);
+const headCommit = run(["rev-parse", "HEAD"]);
+console.log(`Merging ${localBranch} (${headCommit.slice(0, 10)}) into shadow branch...`);
+
+let mergeResult = runSafe(
+  ["merge", "--no-commit", "--no-ff", "-X", "theirs", headCommit],
+  worktreeDir,
+);
+
+if (!mergeResult.ok && mergeResult.stderr.includes("unrelated histories")) {
+  console.log("  Histories are unrelated, retrying with --allow-unrelated-histories...");
+  runSafe(["merge", "--abort"], worktreeDir);
+  mergeResult = runSafe(
+    ["merge", "--no-commit", "--no-ff", "-X", "theirs", "--allow-unrelated-histories", headCommit],
+    worktreeDir,
+  );
+}
+
+if (!mergeResult.ok) {
+  // MERGE_HEAD should still exist — -X theirs resolves content conflicts,
+  // but tree conflicts (modify/delete, rename/rename) may remain.
+  if (!runSafe(["rev-parse", "MERGE_HEAD"], worktreeDir).ok) {
+    console.error(mergeResult.stderr);
+    die("Merge failed. Resolve conflicts manually and retry.");
+  }
+
+  // Auto-resolve any remaining tree conflicts in favour of HEAD (theirs)
+  const unmerged = runSafe(["diff", "--name-only", "--diff-filter=U"], worktreeDir);
+  if (unmerged.ok && unmerged.stdout) {
+    for (const f of unmerged.stdout.split("\n").filter(Boolean)) {
+      const co = runSafe(["checkout", "--theirs", "--", f], worktreeDir);
+      if (co.ok) {
+        run(["add", "--", f], worktreeDir);
+      } else {
+        // File was deleted on theirs side — accept the deletion
+        runSafe(["rm", "--", f], worktreeDir);
+      }
+    }
+  }
+}
+
+// ── Clean index ───────────────────────────────────────────────────────────────
+//
+// The merge brought in everything from HEAD (all dirs, config, scripts…).
+// Strip the index back to only dir/ files, minus shadowignored patterns.
+// Because MERGE_HEAD is still present, the eventual commit will record
+// both parents — giving us real merge ancestry with a clean tree.
+
+console.log(`Cleaning index (removing files outside '${dir}/' and shadowignored files)...`);
+
+const allIndexed = run(["ls-files"], worktreeDir).split("\n").filter(Boolean);
+
+// Remove anything not under dir/
+const nonDirFiles = allIndexed.filter(f => !f.startsWith(`${dir}/`));
+for (let i = 0; i < nonDirFiles.length; i += 100) {
+  const batch = nonDirFiles.slice(i, i + 100);
+  runSafe(["rm", "--cached", "-f", "--", ...batch], worktreeDir);
+}
+
+// Remove shadowignored files under dir/
+if (ignorePatterns.length > 0) {
+  const compiled = ignorePatterns.map(globToRegex);
+  const dirFiles = run(["ls-files", "--", `${dir}/`], worktreeDir)
+    .split("\n").filter(Boolean);
+  const ignoredFiles = dirFiles.filter(f => {
+    const rel = f.slice(dir.length + 1);
+    return compiled.some(re => re.test(rel));
+  });
+  for (let i = 0; i < ignoredFiles.length; i += 100) {
+    const batch = ignoredFiles.slice(i, i + 100);
+    runSafe(["rm", "--cached", "-f", "--", ...batch], worktreeDir);
+  }
+}
 
 // ── Commit & push ─────────────────────────────────────────────────────────────
-
-run(["add", "-A"], worktreeDir);
 
 const hasStagedChanges = !runSafe(["diff", "--cached", "--quiet"], worktreeDir).ok;
 if (!hasStagedChanges) {
@@ -213,52 +262,9 @@ for (let attempt = 1; attempt <= MAX_PUSH_RETRIES; attempt++) {
 cleanup();
 
 console.log();
-console.log(`✓ Done. Exported '${dir}/' → ${pushOrigin}/${shadowBranch} as: "${commitMsg}"`);
+console.log(`\u2713 Done. Exported '${dir}/' \u2192 ${pushOrigin}/${shadowBranch} as: "${commitMsg}"`);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function syncDirs(src: string, dest: string, subdir: string) {
-  const srcSubdir = path.join(src, subdir);
-  const destSubdir = path.join(dest, subdir);
-
-  if (fs.existsSync(destSubdir)) {
-    const destFiles = listAllFiles(destSubdir);
-    for (const rel of destFiles) {
-      const srcPath = path.join(srcSubdir, rel);
-      if (!fs.existsSync(srcPath)) {
-        fs.rmSync(path.join(destSubdir, rel), { force: true });
-      }
-    }
-  }
-  if (fs.existsSync(srcSubdir)) {
-    const srcFiles = listAllFiles(srcSubdir);
-    for (const rel of srcFiles) {
-      const srcPath = path.join(srcSubdir, rel);
-      const destPath = path.join(destSubdir, rel);
-      fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-function listAllFiles(dir: string, prefix = "", depth = 0): string[] {
-  if (depth > MAX_DIR_DEPTH) {
-    console.warn(`Warning: skipping directory at depth ${depth}: ${dir}`);
-    return [];
-  }
-  const results: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue;
-    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-    if (entry.isDirectory()) {
-      if (entry.name === ".git") continue;
-      results.push(...listAllFiles(path.join(dir, entry.name), rel, depth + 1));
-    } else {
-      results.push(rel);
-    }
-  }
-  return results;
-}
 
 function globToRegex(pattern: string): RegExp {
   let re = "";

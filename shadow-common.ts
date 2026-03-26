@@ -6,7 +6,7 @@ import * as os from "os";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-export interface RemoteConfig {
+interface RemoteConfig {
   /** Git remote name — must match `git remote add <name> <url>` */
   remote: string;
   /** Local subdirectory in your repo that maps to the root of that remote */
@@ -47,22 +47,16 @@ function loadConfig(): ShadowSyncConfig {
 const config = loadConfig();
 
 export const REMOTES: RemoteConfig[] = [...config.remotes];
-export const SYNC_TRAILER   = config.trailers.sync;
+const SYNC_TRAILER   = config.trailers.sync;
 export const SEED_TRAILER   = config.trailers.seed;
 export const MAX_DIR_DEPTH  = config.maxDirDepth;
 export const MAX_PUSH_RETRIES = config.maxPushRetries;
 export const SHADOW_BRANCH_PREFIX = config.shadowBranchPrefix;
 
-// Allow tests to inject config via environment variables.
+// Allow tests to inject config via environment variable (JSON array of RemoteConfig).
 if (process.env.SHADOW_TEST_REMOTES) {
   REMOTES.length = 0;
   REMOTES.push(...JSON.parse(process.env.SHADOW_TEST_REMOTES));
-} else if (process.env.SHADOW_TEST_REMOTE) {
-  REMOTES.length = 0;
-  REMOTES.push({
-    remote: process.env.SHADOW_TEST_REMOTE,
-    dir: process.env.SHADOW_TEST_DIR ?? process.env.SHADOW_TEST_REMOTE,
-  });
 }
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
@@ -139,20 +133,16 @@ export function listExternalBranches(remote: string): string[] {
 
 // ── .shadowignore ─────────────────────────────────────────────────────────────
 
-export function parseShadowIgnore(scriptDir: string): { patterns: string[] } {
+export function parseShadowIgnore(scriptDir: string): string[] {
   const ignoreFile = path.join(scriptDir, ".shadowignore");
-  const patterns: string[] = [];
+  if (!fs.existsSync(ignoreFile)) return [];
 
-  if (fs.existsSync(ignoreFile)) {
-    const lines = fs.readFileSync(ignoreFile, "utf8").split("\n");
-    for (const raw of lines) {
-      const line = raw.replace(/#.*$/, "").trim();
-      if (line) patterns.push(line);
-    }
-    console.log(`Loaded ${patterns.length} exclusion(s) from .shadowignore`);
-  }
-
-  return { patterns };
+  const patterns = fs.readFileSync(ignoreFile, "utf8")
+    .split("\n")
+    .map(l => l.replace(/#.*$/, "").trim())
+    .filter(Boolean);
+  console.log(`Loaded ${patterns.length} exclusion(s) from .shadowignore`);
+  return patterns;
 }
 
 // ── Pre-flight checks ─────────────────────────────────────────────────────────
@@ -300,7 +290,7 @@ export function shadowBranchName(dir: string, branch: string): string {
 
 // ── Lockfile ──────────────────────────────────────────────────────────────────
 
-export function acquireLock(scriptDir: string, name: string): () => void {
+export function acquireLock(scriptDir: string, name: string): void {
   const key   = crypto.createHash("md5").update(scriptDir).digest("hex").slice(0, 8);
   const lock  = path.join(os.tmpdir(), `${name}-${key}.lock`);
   const myPid = process.pid.toString();
@@ -353,8 +343,6 @@ export function acquireLock(scriptDir: string, name: string): () => void {
   process.on("exit",    release);
   process.on("SIGINT",  () => { release(); process.exit(130); });
   process.on("SIGTERM", () => { release(); process.exit(143); });
-
-  return release;
 }
 
 // ── Replay engine (internal helpers + exported entry point) ───────────────────
@@ -431,8 +419,7 @@ function diffForCommit(meta: CommitMeta): string {
     if (result.error) throw new Error(`Failed to spawn git: ${result.error.message}`);
     return result.stdout ?? "";
   }
-  const parentRef = parentCount > 1 ? `${hash}^1` : `${hash}^`;
-  const parentHash = run(["rev-parse", parentRef]);
+  const parentHash = run(["rev-parse", `${hash}^1`]);
   const result = spawnSync("git", [...diffArgs, parentHash, hash], {
     encoding: "utf8",
     maxBuffer: MAX_BUFFER,
@@ -566,8 +553,6 @@ export function replayCommits(opts: {
   console.log(`Found ${newCommits.length} new commit(s) to mirror.\n`);
 
   for (const hash of newCommits) {
-    if (alreadySynced.has(hash)) continue;
-
     const meta = getCommitMeta(hash);
 
     const label = meta.parentCount > 1

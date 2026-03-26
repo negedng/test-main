@@ -48,9 +48,15 @@ export default function run() {
       "feature.ts should have final merged content on shadow branch",
     );
 
-    // Verify it's a single commit (not two) on shadow branch
+    // Verify it's a single commit (not two) on shadow branch's own lineage.
+    // Use --first-parent because the merge-based export creates merge commits
+    // whose ancestry includes the full working branch history.
     const shadowLog = getShadowLog(env);
-    const featureCommits = shadowLog.split("\n").filter(l => l.includes("feature"));
+    const firstParentLines = git(
+      "log origin/shadow/frontend/main --first-parent --oneline -20",
+      env.localRepo,
+    ).split("\n").filter(Boolean);
+    const featureCommits = firstParentLines.filter(l => l.includes("feature"));
     assertEqual(featureCommits.length, 1, "should be exactly one commit for the feature on shadow branch");
   } finally {
     env.cleanup();

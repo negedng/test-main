@@ -230,39 +230,27 @@ function shellQuote(s: string): string {
   return `"${s.replace(/"/g, '\\"')}"`;
 }
 
-/** Build env vars for CI sync script — provides remote URLs and config overrides. */
-function ciEnv(env: TestEnv): Record<string, string> {
+/** Build env vars — provides remote URLs and config overrides for all scripts. */
+function buildEnv(env: TestEnv): Record<string, string> {
   const base: Record<string, string> = {
     ...process.env as Record<string, string>,
     SHADOW_PUSH_ORIGIN: "origin",
   };
-  // Override REMOTES config
-  if (env.remotes.length > 1) {
-    base.SHADOW_TEST_REMOTES = JSON.stringify(
-      env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir, url: r.remoteBare }))
-    );
-  } else {
-    base.SHADOW_TEST_REMOTE = env.remoteName;
-    base.SHADOW_TEST_DIR = env.subdir;
-  }
+  // Always use SHADOW_TEST_REMOTES (JSON format) so the URL is included.
+  base.SHADOW_TEST_REMOTES = JSON.stringify(
+    env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir, url: r.remoteBare }))
+  );
   return base;
+}
+
+/** Build env vars for CI sync script. */
+function ciEnv(env: TestEnv): Record<string, string> {
+  return buildEnv(env);
 }
 
 /** Build env vars for local scripts (export). */
 function localEnv(env: TestEnv): Record<string, string> {
-  const base: Record<string, string> = {
-    ...process.env as Record<string, string>,
-    SHADOW_PUSH_ORIGIN: "origin",
-  };
-  if (env.remotes.length > 1) {
-    base.SHADOW_TEST_REMOTES = JSON.stringify(
-      env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir, url: r.remoteBare }))
-    );
-  } else {
-    base.SHADOW_TEST_REMOTE = env.remoteName;
-    base.SHADOW_TEST_DIR = env.subdir;
-  }
-  return base;
+  return buildEnv(env);
 }
 
 /**
