@@ -365,9 +365,21 @@ export function getShadowLogFull(env: TestEnv, n = 20, remote?: RemoteInfo): str
  * Merge the shadow branch into the local working branch.
  * Simulates what a user does to pull external changes locally.
  */
+/**
+ * Safely merge shadow branch into local working branch.
+ * Uses --no-commit + restore of non-dir files to prevent the shadow
+ * branch's tree (which only contains dir/) from deleting everything else.
+ */
 export function mergeShadow(env: TestEnv, remote?: RemoteInfo): void {
   const subdir = remote?.subdir ?? env.subdir;
   const shadowBranch = `shadow/${subdir}/main`;
   git(`fetch origin ${shadowBranch}`, env.localRepo);
-  git(`merge origin/${shadowBranch} --no-edit --allow-unrelated-histories`, env.localRepo);
+  git(`merge --no-commit --no-ff --allow-unrelated-histories origin/${shadowBranch}`, env.localRepo);
+  // Restore non-dir files that the merge "deleted"
+  const headFiles = git("ls-tree -r --name-only HEAD", env.localRepo).split("\n").filter(Boolean);
+  const nonDirFiles = headFiles.filter((f: string) => !f.startsWith(`${subdir}/`));
+  if (nonDirFiles.length > 0) {
+    git(`checkout HEAD -- ${nonDirFiles.join(" ")}`, env.localRepo);
+  }
+  git('commit --no-edit --allow-empty', env.localRepo);
 }
