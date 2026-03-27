@@ -125,7 +125,7 @@ const headFiles = run(["ls-tree", "-r", "--name-only", "HEAD"])
 const nonDirFiles = headFiles.filter(f => !f.startsWith(`${dir}/`));
 
 if (nonDirFiles.length > 0) {
-  console.log(`Restoring ${nonDirFiles.length} file(s) outside '${dir}/'...`);
+  console.log(`Appending ${nonDirFiles.length} file(s) outside '${dir}/' back to the merge...`);
   for (let i = 0; i < nonDirFiles.length; i += 100) {
     run(["checkout", "HEAD", "--", ...nonDirFiles.slice(i, i + 100)]);
   }
