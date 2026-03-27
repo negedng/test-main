@@ -97,7 +97,7 @@ Requires an `EXTERNAL_REPO_TOKEN` secret (a fine-grained PAT with Contents: Read
 | `-r` | Remote name | First entry in config |
 | `-d` | Local subdirectory to export from | Inferred from remote config |
 | `-b` | Target branch | Current local branch |
-| `-m` | Commit message | Git's default merge message |
+| `-m` | Override commit message | Auto-generated summary of exported commits |
 | `-n` | Dry run — show what would change | |
 
 **shadow-setup (initial bootstrap):**
