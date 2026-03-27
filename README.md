@@ -128,21 +128,27 @@ git remote add backend   https://github.com/org/backend.git
 git remote add frontend  https://github.com/org/frontend.git
 ```
 
-3. Create a fine-grained PAT with these permissions:
-   - **Contents: Read and write** on the external repos (for CI forward)
-   - **Actions: Read and write** on the internal repo (for triggering sync from `npm run pull`)
+3. Create two fine-grained PATs (see [PAT setup](shadow-sync-explained.html#pat-setup) for step-by-step):
 
-4. Add it as the `EXTERNAL_REPO_TOKEN` secret in your repo settings (for CI forward — see [PAT setup](shadow-sync-explained.html#pat-setup)).
+   **Token 1 — CI forward** (pushes to external repos):
+   - Repos: the external repos only (`test-frontend`, `test-backend`)
+   - Permission: **Contents: Read and write**
+   - Add as `EXTERNAL_REPO_TOKEN` secret in your internal repo settings (Settings → Secrets → Actions)
 
-5. Set it locally for `npm run pull` to trigger sync on demand:
+   **Token 2 — Local sync trigger** (triggers CI sync from `npm run pull`):
+   - Repos: the internal repo only (`test-main`)
+   - Permission: **Actions: Read and write**
+   - Set as local environment variable:
 
-```bash
-# Linux/macOS (add to ~/.bashrc or ~/.zshrc)
-export EXTERNAL_REPO_TOKEN=github_pat_...
+   ```bash
+   # Linux/macOS (add to ~/.bashrc or ~/.zshrc)
+   export EXTERNAL_REPO_TOKEN=github_pat_...
 
-# PowerShell (add to $PROFILE)
-$env:EXTERNAL_REPO_TOKEN = "github_pat_..."
-```
+   # PowerShell (add to $PROFILE)
+   $env:EXTERNAL_REPO_TOKEN = "github_pat_..."
+   ```
+
+   You can use a single token for both if you prefer — just include all repos and both permissions. Two tokens is safer: if one leaks, the blast radius is smaller.
 
 ## Initial bootstrap
 

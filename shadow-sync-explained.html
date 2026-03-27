@@ -1128,77 +1128,95 @@
 <h2 id="pat-setup">12. Setting Up Cross-Repo Push Access (PAT)</h2>
 
 <div class="card card-accent">
-  <p>The CI forward workflow pushes commits from your internal repo to external repos (e.g. <code>test-frontend</code>, <code>test-backend</code>). GitHub Actions' default <code>GITHUB_TOKEN</code> can only push to the repo the workflow runs in &mdash; it <strong>cannot push to other repos</strong>. To forward changes to external repos, you need a Personal Access Token (PAT) with write access to those repos.</p>
+  <p>Shadow Sync needs two types of API access that the default <code>GITHUB_TOKEN</code> doesn't provide:</p>
+  <ul>
+    <li><strong>CI forward</strong> needs to push to external repos (the default token can only push to the repo the workflow runs in)</li>
+    <li><strong><code>npm run pull</code></strong> needs to trigger the sync workflow via the GitHub API (requires Actions permission)</li>
+  </ul>
+  <p>We recommend <strong>two separate fine-grained PATs</strong> with minimal scope. If one leaks, the blast radius is limited. You can also use a single token with both permissions if you prefer.</p>
 </div>
 
-<h3>Step 1: Create a Fine-Grained Personal Access Token</h3>
+<h3>Token 1: CI Forward (pushes to external repos)</h3>
 
 <div class="card">
+  <h4>Create the token:</h4>
   <ol>
     <li>Go to <strong>GitHub &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens &rarr; Fine-grained tokens</strong></li>
     <li>Click <strong>Generate new token</strong></li>
     <li>Fill in:
       <table>
         <tr><th>Field</th><th>Value</th></tr>
-        <tr><td>Token name</td><td>Something descriptive, e.g. <code>shadow-sync-forward</code></td></tr>
-        <tr><td>Expiration</td><td>Your choice (90 days, 1 year, etc.). You'll need to rotate it before it expires.</td></tr>
+        <tr><td>Token name</td><td><code>shadow-sync-forward</code></td></tr>
+        <tr><td>Expiration</td><td>Your choice (90 days, 1 year, etc.)</td></tr>
         <tr><td>Resource owner</td><td>Your GitHub account or organization</td></tr>
-        <tr><td>Repository access</td><td><strong>Only select repositories</strong> &rarr; select each external repo (e.g. <code>test-frontend</code>, <code>test-backend</code>)</td></tr>
+        <tr><td>Repository access</td><td><strong>Only select repositories</strong> &rarr; select the <strong>external repos only</strong> (e.g. <code>test-frontend</code>, <code>test-backend</code>)</td></tr>
       </table>
     </li>
     <li>Under <strong>Permissions &rarr; Repository permissions</strong>, set:
-      <p>On the <strong>external repos</strong> (e.g. <code>test-frontend</code>, <code>test-backend</code>):</p>
       <table>
         <tr><th>Permission</th><th>Level</th><th>Why</th></tr>
-        <tr><td>Contents</td><td><strong>Read and write</strong></td><td>Needed to push commits to the external repo (CI forward)</td></tr>
-      </table>
-      <p>On the <strong>internal repo</strong> (e.g. <code>test-main</code>):</p>
-      <table>
-        <tr><th>Permission</th><th>Level</th><th>Why</th></tr>
-        <tr><td>Actions</td><td><strong>Read and write</strong></td><td>Needed to trigger the sync workflow from <code>npm run pull</code></td></tr>
+        <tr><td>Contents</td><td><strong>Read and write</strong></td><td>Push commits to external repos</td></tr>
       </table>
       Leave everything else at "No access."
     </li>
-    <li>Click <strong>Generate token</strong> and <strong>copy the token</strong> immediately &mdash; you won't be able to see it again.</li>
+    <li>Click <strong>Generate token</strong> and copy it.</li>
   </ol>
-</div>
 
-<h3>Step 2: Add the Token as a Repository Secret</h3>
-
-<div class="card">
+  <h4>Add as repository secret:</h4>
   <ol>
     <li>Go to your <strong>internal repo</strong> (e.g. <code>github.com/you/test-main</code>) &rarr; <strong>Settings &rarr; Secrets and variables &rarr; Actions</strong></li>
     <li>Click <strong>New repository secret</strong></li>
-    <li>Fill in:
-      <table>
-        <tr><th>Field</th><th>Value</th></tr>
-        <tr><td>Name</td><td><code>EXTERNAL_REPO_TOKEN</code></td></tr>
-        <tr><td>Secret</td><td>Paste the PAT from Step 1</td></tr>
-      </table>
-    </li>
+    <li>Name: <code>EXTERNAL_REPO_TOKEN</code>, Value: paste the token</li>
     <li>Click <strong>Add secret</strong></li>
   </ol>
-  <p>The forward workflow (<code>shadow-forward.yml</code>) is already configured to use this secret. It rewrites all <code>https://github.com/</code> URLs to include the token, so <code>git push</code> to external remotes authenticates automatically.</p>
+  <p>The forward workflow is already configured to use this secret.</p>
 </div>
 
-<h3>Step 3: Set the Token Locally</h3>
+<h3>Token 2: Local Sync Trigger (triggers CI sync from <code>npm run pull</code>)</h3>
 
 <div class="card">
-  <p>The same token is used by <code>npm run pull</code> to trigger CI sync on demand. Set it as an environment variable:</p>
+  <h4>Create the token:</h4>
+  <ol>
+    <li>Same steps as above, but with different scope:
+      <table>
+        <tr><th>Field</th><th>Value</th></tr>
+        <tr><td>Token name</td><td><code>shadow-sync-trigger</code></td></tr>
+        <tr><td>Repository access</td><td><strong>Only select repositories</strong> &rarr; select the <strong>internal repo only</strong> (e.g. <code>test-main</code>)</td></tr>
+      </table>
+    </li>
+    <li>Under <strong>Permissions &rarr; Repository permissions</strong>, set:
+      <table>
+        <tr><th>Permission</th><th>Level</th><th>Why</th></tr>
+        <tr><td>Actions</td><td><strong>Read and write</strong></td><td>Trigger the sync workflow via API</td></tr>
+      </table>
+    </li>
+    <li>Click <strong>Generate token</strong> and copy it.</li>
+  </ol>
+
+  <h4>Set as local environment variable:</h4>
   <pre><code># Linux/macOS (add to ~/.bashrc or ~/.zshrc)
 export EXTERNAL_REPO_TOKEN=github_pat_...
 
-# PowerShell (add to $PROFILE)
+# PowerShell (create $PROFILE if it doesn't exist, then add)
 $env:EXTERNAL_REPO_TOKEN = "github_pat_..."</code></pre>
   <p>If not set, <code>npm run pull</code> still works &mdash; it just skips the sync trigger and pulls whatever the shadow branch currently has.</p>
 </div>
 
-<h3>Step 4: Verify It Works</h3>
+<div class="card card-orange">
+  <h4>Single token alternative</h4>
+  <p>If you prefer one token, create it with all repos selected (<code>test-main</code> + external repos) and both permissions (Contents: Read and write + Actions: Read and write). Use it for both the repository secret and the local env var. The trade-off: if it leaks, the attacker can push to your external repos <em>and</em> trigger workflows.</p>
+</div>
+
+<div class="note">
+  Fine-grained tokens expire. When a token expires, either the forward workflow will fail (Token 1) or <code>npm run pull</code> will skip the sync trigger (Token 2). Generate new tokens and update the secret / env var. Consider setting a calendar reminder a few days before expiration.
+</div>
+
+<h3>Verify It Works</h3>
 
 <div class="card">
   <ol>
-    <li>Make a change in your internal repo under one of the synced directories (e.g. <code>frontend/</code>)</li>
-    <li>Run <code>npm run export</code> to push to the shadow branch</li>
+    <li>Run <code>npm run pull -- -r frontend</code> &mdash; should show "Triggering CI sync..." if the local token is set</li>
+    <li>Make a change under <code>frontend/</code>, commit, run <code>npm run export -- -r frontend</code></li>
     <li>Check the <strong>Actions</strong> tab &mdash; the <strong>Shadow Forward</strong> workflow should trigger and push to the external repo</li>
     <li>Verify the change appears on the external repo</li>
   </ol>
