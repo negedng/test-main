@@ -162,8 +162,7 @@ const allIndexed = run(["ls-files"], worktreeDir).split("\n").filter(Boolean);
 // Keep files needed by CI workflows on the shadow branch. GitHub reads
 // workflow files from the pushed branch, and the forward job needs
 // package.json, the forward script, and shared modules to run.
-const ciKeep = [".github/", "package.json", "package-lock.json",
-  "shadow/shadow-ci-forward.ts", "shadow/shadow-common.ts", "shadow/shadow-config.json"];
+const ciKeep = [".github/", "shadow/"];
 const nonDirFiles = allIndexed.filter(f =>
   !f.startsWith(`${dir}/`) && !ciKeep.some(p => f.startsWith(p))
 );

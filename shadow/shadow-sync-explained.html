@@ -326,12 +326,12 @@
 │   ├── routes.ts
 │   ├── README.md
 │   └── server.ts
-├── shadow/
-│   ├── shadow-ci-forward.ts        &larr; the forward script itself
-│   ├── shadow-common.ts            &larr; shared helpers
-│   └── shadow-config.json          &larr; remote/dir config
-├── package.json                     &larr; needed for npm ci in the forward workflow
-└── package-lock.json</code></pre>
+└── shadow/
+    ├── package.json                 &larr; needed for npm ci in the forward workflow
+    ├── package-lock.json
+    ├── shadow-ci-forward.ts         &larr; the forward script itself
+    ├── shadow-common.ts             &larr; shared helpers
+    └── shadow-config.json           &larr; remote/dir config</code></pre>
 
 <p>Everything else from your internal repo (other subdirectories, test files, export scripts, docs) is <strong>stripped during export</strong> and never appears on the shadow branch.</p>
 

@@ -27,9 +27,9 @@ Three copies of the code:
 ### Pulling external changes
 
 ```bash
-npm run pull                    # pull from first configured remote
-npm run pull -- -r frontend     # pull from a specific remote
-npm run pull -- --no-sync       # skip CI sync trigger, just pull current shadow state
+npm --prefix shadow run pull                    # pull from first configured remote
+npm --prefix shadow run pull -- -r frontend     # pull from a specific remote
+npm --prefix shadow run pull -- --no-sync       # skip CI sync trigger, just pull current shadow state
 ```
 
 This runs `shadow-pull.ts` which:
@@ -42,9 +42,9 @@ This runs `shadow-pull.ts` which:
 ### Pushing your changes
 
 ```bash
-npm run export                                # push to first configured remote
-npm run export -- -r backend -m "Fix API bug" # with optional message
-npm run export -- -n                          # dry run
+npm --prefix shadow run export                                # push to first configured remote
+npm --prefix shadow run export -- -r backend -m "Fix API bug" # with optional message
+npm --prefix shadow run export -- -n                          # dry run
 ```
 
 This runs `shadow-export.ts` which:
@@ -135,7 +135,7 @@ git remote add frontend  https://github.com/org/frontend.git
    - Permission: **Contents: Read and write**
    - Add as `EXTERNAL_REPO_TOKEN` secret in your internal repo settings (Settings → Secrets → Actions)
 
-   **Token 2 — Local sync trigger** (triggers CI sync from `npm run pull`):
+   **Token 2 — Local sync trigger** (triggers CI sync from `npm --prefix shadow run pull`):
    - Repos: the internal repo only (`test-main`)
    - Permission: **Actions: Read and write**
    - Set as local environment variable:
@@ -154,22 +154,22 @@ git remote add frontend  https://github.com/org/frontend.git
 
 ```bash
 # 1. Run setup for each remote (records seed baseline)
-npm run setup -- -r backend
-npm run setup -- -r frontend
+npm --prefix shadow run setup -- -r backend
+npm --prefix shadow run setup -- -r frontend
 
 # 2. Push the seed commits
 git push
 
 # 3. From now on, CI handles sync. To pull/push:
-npm run pull -- -r backend
-npm run export -- -r backend
+npm --prefix shadow run pull -- -r backend
+npm --prefix shadow run export -- -r backend
 ```
 
 ## Tests
 
 ```bash
-npm test                                  # Run all 34 tests
-npx tsx shadow/shadow-tests/test-pull-basic.ts   # Run a single test
+npm --prefix shadow test                                  # Run all 34 tests
+npx --prefix shadow tsx shadow/shadow-tests/test-pull-basic.ts   # Run a single test
 ```
 
 ## Files
