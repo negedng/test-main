@@ -70,6 +70,12 @@ if (!runSafePlain(["diff", "--quiet"]).ok || !runSafePlain(["diff", "--cached", 
 
 if (!values["no-sync"]) {
   console.log("Running local sync (fetching external changes)...");
+
+  // ci-sync checks out shadow branches, which modifies the working tree and
+  // detaches HEAD. Stash any untracked files so checkout doesn't fail, then
+  // restore everything after.
+  const stashed = runSafePlain(["stash", "push", "-u", "-m", "shadow-import: pre-sync stash"]).ok;
+
   const ciSyncPath = path.join(__dirname, "shadow-ci-sync.ts");
   const tsxPath = require.resolve("tsx/cli");
   const result = spawnSync(process.execPath, [tsxPath, ciSyncPath], {
@@ -77,15 +83,16 @@ if (!values["no-sync"]) {
     stdio: ["pipe", "inherit", "inherit"],
     cwd: path.resolve(__dirname, ".."),
   });
+
+  // Restore the original branch and working tree
+  runPlain(["checkout", localBranch]);
+  runPlain(["checkout", "--", "."]);
+  if (stashed) runSafePlain(["stash", "pop"]);
+
   if (result.status !== 0) {
     if (result.error) console.error(result.error.message);
     die("Local sync failed.");
   }
-
-  // ci-sync checks out shadow branches, which detaches HEAD.
-  // Restore the original branch so the merge lands on the right branch.
-  runPlain(["checkout", localBranch]);
-  runPlain(["checkout", "--", "."]);
 }
 
 // ── Fetch and merge ───────────────────────────────────────────────────────────
