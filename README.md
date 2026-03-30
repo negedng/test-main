@@ -8,7 +8,7 @@ For a detailed technical deep dive, see [`shadow/shadow-sync-explained.html`](sh
 
 ```
 PULLING (external → us):
-  External Repo ──[ CI sync ]──→ Shadow Branch ──[ shadow-pull ]──→ Your Branch
+  External Repo ──[ CI sync ]──→ Shadow Branch ──[ shadow-import ]──→ Your Branch
 
 PUSHING (us → external):
   Your Branch ──[ shadow-export + .shadowignore ]──→ Shadow Branch ──[ CI forward ]──→ External Repo
@@ -24,18 +24,18 @@ Three copies of the code:
 
 ## Local workflow
 
-### Pulling external changes
+### Importing external changes
 
 ```bash
-npm --prefix shadow run pull                    # pull from first configured remote
-npm --prefix shadow run pull -- -r frontend     # pull from a specific remote
-npm --prefix shadow run pull -- --no-sync       # skip CI sync trigger, just pull current shadow state
+npm --prefix shadow run import                    # pull from first configured remote
+npm --prefix shadow run import -- -r frontend     # pull from a specific remote
+npm --prefix shadow run import -- --no-sync       # skip CI sync trigger, just pull current shadow state
 ```
 
-This runs `shadow-pull.ts` which:
+This runs `shadow-import.ts` which:
 1. Triggers CI sync on GitHub to fetch the latest external changes (requires `EXTERNAL_REPO_TOKEN` — skipped if not set)
 2. Waits ~20 seconds for the sync to complete
-3. Safely merges the shadow branch into your local branch — only `dir/` files are affected, all other files are preserved
+3. Safely merges the shadow branch into your local branch — resets the index to HEAD with `git read-tree`, then overlays only `dir/` changes, so all other files are preserved
 
 **Warning:** Do **not** use a raw `git merge origin/shadow/{dir}/main`. The shadow branch only contains `dir/` files, so a raw merge would delete everything else in your repo.
 
@@ -49,9 +49,9 @@ npm --prefix shadow run export -- -n                          # dry run
 
 This runs `shadow-export.ts` which:
 1. Checks that the shadow branch is merged into your local branch (refuses otherwise)
-2. Merges your branch into the shadow branch (real git merge with proper ancestry)
-3. Strips non-`dir/` files and `.shadowignore` matches from the index
-4. Commits and pushes — CI automatically forwards to the external remote
+2. Builds a tree using git plumbing: reads only `dir/`, `.github/`, and `shadow/` from HEAD into a temp index via `git read-tree`
+3. Removes `.shadowignore` matches from the index
+4. Creates a merge commit with `git commit-tree` (two parents: shadow tip + HEAD) and pushes — CI automatically forwards to the external remote
 
 ### `.shadowignore`
 
@@ -75,13 +75,13 @@ Runs on a cron schedule (every 15 minutes requested, but GitHub may delay runs �
 
 ### Shadow Forward — `.github/workflows/shadow-forward.yml`
 
-Triggers on push to `shadow/**` branches. Takes a snapshot of the `{dir}/` content (stripping the subdirectory prefix) and pushes to the external remote.
+Triggers on push to `shadow/**` branches. Uses git plumbing (`git read-tree` + `git commit-tree`) to build a commit with the `{dir}/` content at root level (stripping the prefix) and pushes to the external remote.
 
 Requires an `EXTERNAL_REPO_TOKEN` secret (a fine-grained PAT with Contents: Read and write access to the external repos). See the [PAT setup section in the technical docs](shadow/shadow-sync-explained.html#pat-setup) for step-by-step instructions.
 
 ## Options
 
-**shadow-pull:**
+**shadow-import:**
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -135,7 +135,7 @@ git remote add frontend  https://github.com/org/frontend.git
    - Permission: **Contents: Read and write**
    - Add as `EXTERNAL_REPO_TOKEN` secret in your internal repo settings (Settings → Secrets → Actions)
 
-   **Token 2 — Local sync trigger** (triggers CI sync from `npm --prefix shadow run pull`):
+   **Token 2 — Local sync trigger** (triggers CI sync from `npm --prefix shadow run import`):
    - Repos: the internal repo only (`test-main`)
    - Permission: **Actions: Read and write**
    - Set as local environment variable:
@@ -161,7 +161,7 @@ npm --prefix shadow run setup -- -r frontend
 git push
 
 # 3. From now on, CI handles sync. To pull/push:
-npm --prefix shadow run pull -- -r backend
+npm --prefix shadow run import -- -r backend
 npm --prefix shadow run export -- -r backend
 ```
 
@@ -181,10 +181,10 @@ All shadow sync scripts live in the `shadow/` directory:
 | `shadow/shadow-config.json` | Remotes, trailers, git config overrides, limits |
 | `shadow/shadow-common.ts` | Shared config, git helpers, replay engine, lockfile |
 | `shadow/shadow-setup.ts` | Bootstrap: records seed so CI sync skips existing history |
-| `shadow/shadow-pull.ts` | Safely merges shadow branch into local (only `dir/` affected) |
-| `shadow/shadow-export.ts` | Merges local changes into shadow branch (with `.shadowignore` filtering) |
+| `shadow/shadow-import.ts` | Safely merges shadow branch into local (only `dir/` affected) |
+| `shadow/shadow-export.ts` | Exports local changes to shadow branch using git plumbing (with `.shadowignore` filtering) |
 | `shadow/shadow-ci-sync.ts` | CI: replays external commits into shadow branches |
-| `shadow/shadow-ci-forward.ts` | CI: forwards shadow branch content to external remotes |
+| `shadow/shadow-ci-forward.ts` | CI: forwards shadow branch content to external remotes using git plumbing |
 | `shadow/.shadowignore` | Glob patterns for files to exclude from export |
 | `shadow/shadow-sync-explained.html` | Detailed technical documentation |
 | `shadow/shadow-tests/` | 34 automated tests |

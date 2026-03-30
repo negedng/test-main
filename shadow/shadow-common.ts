@@ -49,8 +49,6 @@ const config = loadConfig();
 export const REMOTES: RemoteConfig[] = [...config.remotes];
 const SYNC_TRAILER   = config.trailers.sync;
 export const SEED_TRAILER   = config.trailers.seed;
-export const MAX_DIR_DEPTH  = config.maxDirDepth;
-export const MAX_PUSH_RETRIES = config.maxPushRetries;
 export const SHADOW_BRANCH_PREFIX = config.shadowBranchPrefix;
 
 // Allow tests to inject config via environment variable (JSON array of RemoteConfig).
@@ -59,7 +57,7 @@ if (process.env.SHADOW_TEST_REMOTES) {
   REMOTES.push(...JSON.parse(process.env.SHADOW_TEST_REMOTES));
 }
 
-// ── Git helpers ───────────────────────────────────────────────────────────────
+// ── Core utilities ───────────────────────────────────────────────────────────
 
 const MAX_BUFFER = config.maxBuffer;
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -68,6 +66,19 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const GIT_CONFIG_OVERRIDES = Object.entries(config.gitConfigOverrides).flatMap(
   ([key, value]) => ["-c", `${key}=${value}`],
 );
+
+export function die(msg: string): never {
+  console.error(`✘ ${msg}`);
+  process.exit(1);
+}
+
+/** Validate that a dir/remote name is safe for use in git commands and path construction. */
+export function validateName(value: string, label: string): void {
+  if (!value) die(`${label} must not be empty.`);
+  if (value.includes("..")) die(`${label} must not contain '..'.`);
+  if (value.startsWith("/") || value.startsWith("\\")) die(`${label} must not be an absolute path.`);
+  if (value.startsWith("-")) die(`${label} must not start with '-'.`);
+}
 
 function git(args: string[], cwd?: string) {
   return spawnSync("git", [...GIT_CONFIG_OVERRIDES, ...args], {
@@ -95,6 +106,10 @@ export function runSafe(args: string[], cwd?: string) {
   };
 }
 
+export function refExists(ref: string): boolean {
+  return runSafe(["rev-parse", "--verify", ref]).ok;
+}
+
 export function getCurrentBranch(): string {
   const result = runSafe(["symbolic-ref", "--short", "HEAD"]);
   if (!result.ok) {
@@ -103,16 +118,31 @@ export function getCurrentBranch(): string {
   return result.stdout;
 }
 
-export function refExists(ref: string): boolean {
-  return runSafe(["rev-parse", "--verify", ref]).ok;
-}
-
 export function listExternalBranches(remote: string): string[] {
   return run(["branch", "-r"])
     .split("\n")
     .map(l => l.trim())
     .filter(l => l.startsWith(`${remote}/`) && !l.includes("->"))
     .map(l => l.replace(`${remote}/`, ""));
+}
+
+/** Build the canonical shadow branch name: shadow/{dir}/{branch} */
+export function shadowBranchName(dir: string, branch: string): string {
+  return `${SHADOW_BRANCH_PREFIX}/${dir}/${branch}`;
+}
+
+/** Append a trailer to a commit message using `git interpret-trailers`. */
+export function appendTrailer(message: string, trailer: string): string {
+  const result = spawnSync(
+    "git",
+    [...GIT_CONFIG_OVERRIDES, "interpret-trailers", "--trailer", trailer],
+    { input: message, encoding: "utf8", maxBuffer: MAX_BUFFER, stdio: ["pipe", "pipe", "pipe"] },
+  );
+  if (result.error || result.status !== 0) {
+    const trimmed = message.trimEnd();
+    return `${trimmed}\n\n${trailer}\n`;
+  }
+  return result.stdout;
 }
 
 // ── .shadowignore ─────────────────────────────────────────────────────────────
@@ -127,6 +157,63 @@ export function parseShadowIgnore(scriptDir: string): string[] {
     .filter(Boolean);
   console.log(`Loaded ${patterns.length} exclusion(s) from .shadowignore`);
   return patterns;
+}
+
+// ── Lockfile ──────────────────────────────────────────────────────────────────
+
+export function acquireLock(scriptDir: string, name: string): void {
+  const key   = crypto.createHash("md5").update(scriptDir).digest("hex").slice(0, 8);
+  const lock  = path.join(os.tmpdir(), `${name}-${key}.lock`);
+  const myPid = process.pid.toString();
+
+  if (fs.existsSync(lock)) {
+    const existingPid = fs.readFileSync(lock, "utf8").trim();
+    let alive = false;
+    if (/^\d+$/.test(existingPid)) {
+      if (process.platform === "win32") {
+        const r = spawnSync("tasklist", ["/FI", `PID eq ${existingPid}`, "/NH"], {
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        alive = (r.stdout ?? "").includes(existingPid);
+      } else {
+        const r = spawnSync("kill", ["-0", existingPid], {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        alive = r.status === 0;
+      }
+    }
+    if (alive) die(`Another ${name} is already running (PID ${existingPid}).`);
+    try { fs.unlinkSync(lock); } catch (e: any) {
+      if (e.code !== "ENOENT") throw e;
+    }
+  }
+
+  try {
+    fs.writeFileSync(lock, myPid, { flag: "wx" });
+  } catch (e: any) {
+    if (e.code === "EEXIST") {
+      die(`Another ${name} is already running (lock file appeared during race).`);
+    }
+    throw e;
+  }
+
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    try {
+      if (fs.existsSync(lock) && fs.readFileSync(lock, "utf8").trim() === myPid) {
+        fs.unlinkSync(lock);
+      }
+    } catch (e: any) {
+      if (e.code !== "ENOENT") console.warn(`Warning: failed to release lock: ${e.message}`);
+    }
+  };
+
+  process.on("exit",    release);
+  process.on("SIGINT",  () => { release(); process.exit(130); });
+  process.on("SIGTERM", () => { release(); process.exit(143); });
 }
 
 // ── Pre-flight checks ─────────────────────────────────────────────────────────
@@ -191,101 +278,7 @@ export function handlePreflightResults(warnings: { level: "error" | "warn"; code
   return errorCount === 0;
 }
 
-// ── Misc ──────────────────────────────────────────────────────────────────────
-
-/** Validate that a dir/remote name is safe for use in git commands and path construction. */
-export function validateName(value: string, label: string): void {
-  if (!value) die(`${label} must not be empty.`);
-  if (value.includes("..")) die(`${label} must not contain '..'.`);
-  if (value.startsWith("/") || value.startsWith("\\")) die(`${label} must not be an absolute path.`);
-  if (value.startsWith("-")) die(`${label} must not start with '-'.`);
-}
-
-export function die(msg: string): never {
-  console.error(`✘ ${msg}`);
-  process.exit(1);
-}
-
-/** Append a trailer to a commit message using `git interpret-trailers`. */
-export function appendTrailer(message: string, trailer: string): string {
-  const result = spawnSync(
-    "git",
-    [...GIT_CONFIG_OVERRIDES, "interpret-trailers", "--trailer", trailer],
-    { input: message, encoding: "utf8", maxBuffer: MAX_BUFFER, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  if (result.error || result.status !== 0) {
-    const trimmed = message.trimEnd();
-    return `${trimmed}\n\n${trailer}\n`;
-  }
-  return result.stdout;
-}
-
-// ── Shadow branch helpers ────────────────────────────────────────────────────
-
-/** Build the canonical shadow branch name: shadow/{dir}/{branch} */
-export function shadowBranchName(dir: string, branch: string): string {
-  return `${SHADOW_BRANCH_PREFIX}/${dir}/${branch}`;
-}
-
-
-// ── Lockfile ──────────────────────────────────────────────────────────────────
-
-export function acquireLock(scriptDir: string, name: string): void {
-  const key   = crypto.createHash("md5").update(scriptDir).digest("hex").slice(0, 8);
-  const lock  = path.join(os.tmpdir(), `${name}-${key}.lock`);
-  const myPid = process.pid.toString();
-
-  if (fs.existsSync(lock)) {
-    const existingPid = fs.readFileSync(lock, "utf8").trim();
-    let alive = false;
-    if (/^\d+$/.test(existingPid)) {
-      if (process.platform === "win32") {
-        const r = spawnSync("tasklist", ["/FI", `PID eq ${existingPid}`, "/NH"], {
-          encoding: "utf8",
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        alive = (r.stdout ?? "").includes(existingPid);
-      } else {
-        const r = spawnSync("kill", ["-0", existingPid], {
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        alive = r.status === 0;
-      }
-    }
-    if (alive) die(`Another ${name} is already running (PID ${existingPid}).`);
-    try { fs.unlinkSync(lock); } catch (e: any) {
-      if (e.code !== "ENOENT") throw e;
-    }
-  }
-
-  try {
-    fs.writeFileSync(lock, myPid, { flag: "wx" });
-  } catch (e: any) {
-    if (e.code === "EEXIST") {
-      die(`Another ${name} is already running (lock file appeared during race).`);
-    }
-    throw e;
-  }
-
-  let released = false;
-  const release = () => {
-    if (released) return;
-    released = true;
-    try {
-      if (fs.existsSync(lock) && fs.readFileSync(lock, "utf8").trim() === myPid) {
-        fs.unlinkSync(lock);
-      }
-    } catch (e: any) {
-      if (e.code !== "ENOENT") console.warn(`Warning: failed to release lock: ${e.message}`);
-    }
-  };
-
-  process.on("exit",    release);
-  process.on("SIGINT",  () => { release(); process.exit(130); });
-  process.on("SIGTERM", () => { release(); process.exit(143); });
-}
-
-// ── Replay engine (internal helpers + exported entry point) ───────────────────
+// ── Replay engine ─────────────────────────────────────────────────────────────
 
 interface CommitMeta {
   hash:           string;
