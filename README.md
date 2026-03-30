@@ -44,10 +44,12 @@ This runs `shadow-import.ts` which:
 npm --prefix shadow run export                                # push to first configured remote
 npm --prefix shadow run export -- -r backend -m "Fix API bug" # with optional message
 npm --prefix shadow run export -- -n                          # dry run
+npm --prefix shadow run export -- --no-sync                   # skip sync
 ```
 
 This runs `shadow-export.ts` which:
-1. Checks that the shadow branch is merged into your local branch (refuses otherwise)
+1. Runs ci-sync locally to ensure the shadow branch has the latest external changes (skipped with `--no-sync`)
+2. Checks that the shadow branch is merged into your local branch (refuses otherwise)
 2. Builds a tree using git plumbing: reads only `dir/`, `.github/`, and `shadow/` from HEAD into a temp index via `git read-tree`
 3. Removes `.shadowignore` matches from the index
 4. Creates a merge commit with `git commit-tree` (two parents: shadow tip + HEAD) and pushes — CI automatically forwards to the external remote
@@ -98,6 +100,7 @@ Requires an `EXTERNAL_REPO_TOKEN` secret (a fine-grained PAT with Contents: Read
 | `-b` | Target branch | Current local branch |
 | `-m` | Override commit message | Auto-generated summary of exported commits |
 | `-n` | Dry run — show what would change | |
+| `--no-sync` | Skip syncing external changes before export | |
 
 **shadow-setup (initial bootstrap):**
 

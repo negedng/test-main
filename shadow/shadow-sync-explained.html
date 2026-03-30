@@ -896,14 +896,15 @@
 <h3 id="fn-export"><a href="shadow-export.ts">shadow-export.ts</a> &mdash; Local Export Script</h3>
 
 <div class="card">
-  <p><strong>Purpose:</strong> Export your local changes from an internal repo subdirectory to the shadow branch using git plumbing commands, filtering out files you don't want in the external repo. No worktree or merge is needed &mdash; the tree and commit are built directly in memory.</p>
+  <p><strong>Purpose:</strong> Export your local changes from an internal repo subdirectory to the shadow branch using git plumbing commands, filtering out files you don't want in the external repo. Syncs external changes first to ensure the shadow branch is up to date. No worktree or merge is needed for the export itself &mdash; the tree and commit are built directly in memory.</p>
 
   <h4>Step-by-step flow:</h4>
   <ol>
-    <li><strong>Parse arguments</strong> &mdash; message (optional), remote, dir, branch, dry-run</li>
+    <li><strong>Parse arguments</strong> &mdash; message (optional), remote, dir, branch, dry-run, no-sync</li>
     <li><strong>Check for uncommitted changes in <code>dir/</code></strong> &mdash; refuses to run if the subdirectory has unsaved work. <strong>Acquire lock</strong> (<a href="#fn-acquireLock"><code>acquireLock</code></a>) to prevent concurrent exports.</li>
     <li><strong>Parse .shadowignore</strong> (<a href="#fn-parseShadowIgnore"><code>parseShadowIgnore</code></a>) &mdash; load exclusion patterns</li>
-    <li><strong>Fetch from origin</strong> &mdash; verify the shadow branch exists and is merged into HEAD (i.e. <code>git merge-base --is-ancestor shadowRef HEAD</code>). If the shadow branch has unmerged commits, export refuses and tells you to pull first.</li>
+    <li><strong>Local sync</strong> &mdash; runs <code>shadow-ci-sync.ts</code> locally (stash, sync, restore) to ensure the shadow branch has the latest external commits. Skipped with <code>--no-sync</code>.</li>
+    <li><strong>Fetch from origin</strong> &mdash; verify the shadow branch exists and is merged into HEAD (i.e. <code>git merge-base --is-ancestor shadowRef HEAD</code>). If the shadow branch has unmerged commits, export refuses and tells you to import first.</li>
     <li><strong>Set <code>GIT_INDEX_FILE</code></strong> &mdash; point to a temp file so the real index is untouched</li>
     <li><strong>Build the desired tree</strong> &mdash; <code>git read-tree --empty</code> clears the temp index, then <code>git read-tree --prefix=dir/ HEAD:dir</code> reads the subdirectory into the index. Also reads <code>.github/</code> and <code>shadow/</code> subtrees for CI dependencies.</li>
     <li><strong>Remove shadowignored files</strong> from the index via <code>git rm --cached</code></li>
@@ -1150,7 +1151,7 @@
 </table>
 
 <h3>shadow-export.ts</h3>
-<pre><code>npm run export -- [-m "commit message"] [-r remote] [-d dir] [-b branch] [-n]</code></pre>
+<pre><code>npm run export -- [-m "commit message"] [-r remote] [-d dir] [-b branch] [-n] [--no-sync]</code></pre>
 <table>
   <tr><th>Flag</th><th>Long</th><th>Description</th><th>Default</th></tr>
   <tr><td><code>-m</code></td><td><code>--message</code></td><td>Override the commit message</td><td>Auto-generated: <code>Export dir/ (N commits)</code> with list of commit subjects</td></tr>
@@ -1158,6 +1159,7 @@
   <tr><td><code>-d</code></td><td><code>--dir</code></td><td>Local subdirectory to export from</td><td>Inferred from remote config</td></tr>
   <tr><td><code>-b</code></td><td><code>--branch</code></td><td>Target branch on the shadow/external side</td><td>Your current local branch</td></tr>
   <tr><td><code>-n</code></td><td><code>--dry-run</code></td><td>Show what would change without actually pushing</td><td>Off</td></tr>
+  <tr><td></td><td><code>--no-sync</code></td><td>Skip syncing external changes before export</td><td>Off</td></tr>
   <tr><td><code>-h</code></td><td><code>--help</code></td><td>Show usage help</td><td>&mdash;</td></tr>
 </table>
 

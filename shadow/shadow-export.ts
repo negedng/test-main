@@ -1,13 +1,17 @@
 #!/usr/bin/env ts-node
 /**
- * shadow-export.ts — Merge local changes into the shadow branch,
- * filtering out .shadowignore files. Creates a proper merge commit
- * so the shadow branch has real ancestry back to your working branch.
+ * shadow-export.ts — Export local changes to the shadow branch.
+ *
+ * 1. Runs ci-sync locally to ensure shadow branch has latest external changes.
+ *    Skipped with --no-sync.
+ * 2. Builds a filtered tree (applying .shadowignore) and creates a merge commit
+ *    so the shadow branch has real ancestry back to your working branch.
  *
  * Usage:
  *   npx tsx shadow-export.ts -m "Add login page"
  *   npx tsx shadow-export.ts -r backend -m "Fix API bug"
  *   npx tsx shadow-export.ts -r frontend -b feature/new-page -m "Add new page"
+ *   npx tsx shadow-export.ts --no-sync
  */
 import { parseArgs } from "util";
 import * as path from "path";
@@ -16,7 +20,7 @@ import * as os from "os";
 import { spawnSync } from "child_process";
 import {
   REMOTES,
-  run, runSafe, runSafePlain, refExists,
+  run, runSafe, runPlain, runSafePlain, refExists,
   getCurrentBranch, shadowBranchName,
   parseShadowIgnore, acquireLock, validateName, die,
 } from "./shadow-common";
@@ -30,18 +34,20 @@ const { values } = parseArgs({
     dir:       { type: "string",  short: "d" },
     branch:    { type: "string",  short: "b" },
     "dry-run": { type: "boolean", short: "n" },
+    "no-sync": { type: "boolean" },
     help:      { type: "boolean", short: "h" },
   },
   strict: true,
 });
 
 if (values.help) {
-  console.log('Usage: shadow-export.ts [-m "commit message"] [-r remote] [-d dir] [-b branch] [-n]');
-  console.log("  -m  Commit message                        (default: git's merge commit message)");
-  console.log("  -r  Remote name (selects config entry)    (default: first entry in REMOTES)");
-  console.log("  -d  Local subdirectory to export from     (default: same as remote name)");
-  console.log("  -b  Target branch                         (default: your current branch)");
-  console.log("  -n  Dry run — show what would change without pushing");
+  console.log('Usage: shadow-export.ts [-m "commit message"] [-r remote] [-d dir] [-b branch] [-n] [--no-sync]');
+  console.log("  -m         Commit message                        (default: auto-generated summary)");
+  console.log("  -r         Remote name (selects config entry)    (default: first entry in REMOTES)");
+  console.log("  -d         Local subdirectory to export from     (default: same as remote name)");
+  console.log("  -b         Target branch                         (default: your current branch)");
+  console.log("  -n         Dry run — show what would change without pushing");
+  console.log("  --no-sync  Skip syncing external changes before export");
   process.exit(0);
 }
 
@@ -90,6 +96,31 @@ console.log(`Shadow branch : ${shadowBranch}\n`);
 // ── .shadowignore ─────────────────────────────────────────────────────────────
 
 const ignorePatterns = parseShadowIgnore(SCRIPT_DIR);
+
+// ── Sync external changes ────────────────────────────────────────────────────
+
+if (!values["no-sync"]) {
+  console.log("Running local sync (fetching external changes)...");
+
+  const stashed = runSafePlain(["stash", "push", "-u", "-m", "shadow-export: pre-sync stash"]).ok;
+
+  const ciSyncPath = path.join(__dirname, "shadow-ci-sync.ts");
+  const tsxPath = require.resolve("tsx/cli");
+  const result = spawnSync(process.execPath, [tsxPath, ciSyncPath], {
+    encoding: "utf8",
+    stdio: ["pipe", "inherit", "inherit"],
+    cwd: path.resolve(__dirname, ".."),
+  });
+
+  runPlain(["checkout", localBranch]);
+  runPlain(["checkout", "HEAD", "--", "."]);
+  if (stashed) runSafePlain(["stash", "pop"]);
+
+  if (result.status !== 0) {
+    if (result.error) console.error(result.error.message);
+    die("Local sync failed.");
+  }
+}
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 
