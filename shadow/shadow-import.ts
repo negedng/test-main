@@ -71,7 +71,8 @@ if (!runSafePlain(["diff", "--quiet"]).ok || !runSafePlain(["diff", "--cached", 
 if (!values["no-sync"]) {
   console.log("Running local sync (fetching external changes)...");
   const ciSyncPath = path.join(__dirname, "shadow-ci-sync.ts");
-  const result = spawnSync("npx", ["tsx", ciSyncPath], {
+  const tsxPath = require.resolve("tsx/cli");
+  const result = spawnSync(process.execPath, [tsxPath, ciSyncPath], {
     encoding: "utf8",
     stdio: ["pipe", "inherit", "inherit"],
     cwd: path.resolve(__dirname, ".."),
