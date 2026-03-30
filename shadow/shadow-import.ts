@@ -81,6 +81,11 @@ if (!values["no-sync"]) {
     if (result.error) console.error(result.error.message);
     die("Local sync failed.");
   }
+
+  // ci-sync checks out shadow branches, which detaches HEAD.
+  // Restore the original branch so the merge lands on the right branch.
+  runPlain(["checkout", localBranch]);
+  runPlain(["checkout", "--", "."]);
 }
 
 // ── Fetch and merge ───────────────────────────────────────────────────────────
