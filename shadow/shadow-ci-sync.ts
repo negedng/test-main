@@ -87,14 +87,19 @@ for (const { remote, dir, url } of remotesToSync) {
 
     // Run the per-commit replay
     try {
+      // Capture tree before replay to detect if anything actually changed
+      const treeBefore = run(["rev-parse", "HEAD^{tree}"]);
       const result = replayCommits({ remote, dir, externalBranch: branch });
+      const treeAfter = run(["rev-parse", "HEAD^{tree}"]);
 
-      if (!result.upToDate) {
+      if (result.upToDate) {
+        console.log(`  ${shadow} is up to date.`);
+      } else if (treeBefore === treeAfter) {
+        console.log(`  ${result.mirrored} commit(s) mirrored but no tree changes (all forwarded). Skipping push.`);
+      } else {
         console.log(`  Pushing ${result.mirrored} new commit(s) to origin/${shadow}...`);
         run(["push", "origin", `${shadow}:${shadow}`]);
         console.log(`  ✓ Pushed.`);
-      } else {
-        console.log(`  ${shadow} is up to date.`);
       }
     } catch (err: any) {
       console.error(`  ✘ Failed to replay ${externalRef}: ${err.message}`);
