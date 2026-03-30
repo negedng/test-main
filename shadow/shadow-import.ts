@@ -115,15 +115,23 @@ console.log(`Merging ${shadowRef} into ${localBranch}...`);
 
 // Use plain git (no autocrlf override) for working-tree operations on Windows
 const mergeResult = runSafePlain(["merge", "--no-commit", "--no-ff", shadowRef]);
+console.log(`  merge exit: ${mergeResult.status}, stderr: ${mergeResult.stderr}`);
 
-if (!mergeResult.ok && !runSafePlain(["rev-parse", "MERGE_HEAD"]).ok) {
+const mhResult = runSafePlain(["rev-parse", "MERGE_HEAD"]);
+console.log(`  MERGE_HEAD: ${mhResult.ok ? mhResult.stdout : "not found"}`);
+
+if (!mergeResult.ok && !mhResult.ok) {
   console.error(mergeResult.stderr);
   die("Merge failed.");
 }
 
 // Reset index to HEAD (undoes merge effect on all files), then overlay
 // only dir/ from the shadow branch. MERGE_HEAD is preserved.
+console.log(`  read-tree HEAD...`);
 runPlain(["read-tree", "HEAD"]);
+console.log(`  checkout ${shadowRef} -- ${dir}/...`);
+const lsResult = runSafePlain(["ls-tree", "--name-only", shadowRef, "--", `${dir}/`]);
+console.log(`  ls-tree ${shadowRef} -- ${dir}/: ${lsResult.stdout.split("\n").length} files`);
 runPlain(["checkout", shadowRef, "--", `${dir}/`]);
 runPlain(["commit", "--no-edit", "--allow-empty"]);
 
