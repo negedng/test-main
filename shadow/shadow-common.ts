@@ -113,6 +113,14 @@ export function runSafe(args: string[], cwd?: string) {
   };
 }
 
+/** Like run but without config overrides — uses repo/global git settings. */
+export function runPlain(args: string[], cwd?: string): string {
+  const r = gitPlain(args, cwd);
+  if (r.error) throw new Error(`Failed to spawn git: ${r.error.message}`);
+  if (r.status !== 0) throw new Error(`git ${args[0]} failed (exit ${r.status}): ${(r.stderr ?? "").trim()}`);
+  return (r.stdout ?? "").trim();
+}
+
 /** Like runSafe but without config overrides — uses repo/global git settings. */
 export function runSafePlain(args: string[], cwd?: string) {
   const r = gitPlain(args, cwd);

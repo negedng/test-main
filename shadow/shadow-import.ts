@@ -15,7 +15,7 @@
 import { parseArgs } from "util";
 import {
   REMOTES,
-  run, runSafe, runSafePlain, refExists,
+  run, runPlain, runSafe, runSafePlain, refExists,
   getCurrentBranch, shadowBranchName,
   validateName, die,
 } from "./shadow-common";
@@ -113,17 +113,18 @@ if (runSafe(["merge-base", "--is-ancestor", shadowRef, "HEAD"]).ok) {
 
 console.log(`Merging ${shadowRef} into ${localBranch}...`);
 
-const mergeResult = runSafe(["merge", "--no-commit", "--no-ff", shadowRef]);
+// Use plain git (no autocrlf override) for working-tree operations on Windows
+const mergeResult = runSafePlain(["merge", "--no-commit", "--no-ff", shadowRef]);
 
-if (!mergeResult.ok && !runSafe(["rev-parse", "MERGE_HEAD"]).ok) {
+if (!mergeResult.ok && !runSafePlain(["rev-parse", "MERGE_HEAD"]).ok) {
   console.error(mergeResult.stderr);
   die("Merge failed.");
 }
 
 // Reset index to HEAD (undoes merge effect on all files), then overlay
 // only dir/ from the shadow branch. MERGE_HEAD is preserved.
-run(["read-tree", "HEAD"]);
-run(["checkout", shadowRef, "--", `${dir}/`]);
-run(["commit", "--no-edit", "--allow-empty"]);
+runPlain(["read-tree", "HEAD"]);
+runPlain(["checkout", shadowRef, "--", `${dir}/`]);
+runPlain(["commit", "--no-edit", "--allow-empty"]);
 
 console.log(`\n\u2713 Done. Merged ${shadowRef} into ${localBranch} (only '${dir}/' was affected).`);
