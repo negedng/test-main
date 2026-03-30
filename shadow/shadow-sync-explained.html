@@ -679,15 +679,14 @@
 <h4>Git Helpers</h4>
 
 <div class="card">
-  <div class="fn-sig" id="fn-run">run(args: string[], cwd?: string): string <a class="src-link" href="shadow-common.ts#L88">[source:88]</a></div>
-  <p>Runs a git command and returns its output. <strong>Throws an error</strong> if the command fails (non-zero exit code). Both <code>run</code> and <code>runSafe</code> share a private <code>git()</code> helper that prepends config overrides and sets buffer/encoding options.</p>
-  <p><strong>Use when:</strong> The command <em>must</em> succeed (failure is a bug).</p>
-</div>
-
-<div class="card">
-  <div class="fn-sig" id="fn-runSafe">runSafe(args: string[], cwd?: string): { stdout, stderr, status, ok } <a class="src-link" href="shadow-common.ts#L95">[source:95]</a></div>
-  <p>Runs a git command but <strong>never throws</strong>. Returns an object with the output, error text, exit code, and a boolean <code>ok</code> flag. The caller decides how to handle failure.</p>
-  <p><strong>Use when:</strong> Failure is expected or you need to check the result (e.g. "does this branch exist?").</p>
+  <div class="fn-sig" id="fn-git">git(args, opts?): string | GitResult <a class="src-link" href="shadow-common.ts#L93">[source:93]</a></div>
+  <p>Single entry point for all git commands. Options:</p>
+  <ul>
+    <li><code>{ safe: true }</code> &mdash; returns <code>{ stdout, stderr, status, ok }</code> instead of throwing. Use when failure is expected (e.g. checking if a ref exists).</li>
+    <li><code>{ plain: true }</code> &mdash; skips config overrides (<code>core.autocrlf=false</code>, etc.). Use for working-tree operations on Windows where the repo's own settings must be respected.</li>
+    <li>Both can be combined: <code>{ safe: true, plain: true }</code></li>
+  </ul>
+  <p>Without <code>safe</code>, throws on non-zero exit. Without <code>plain</code>, prepends cross-OS config overrides for consistent replay behavior. All calls default to the repo root as cwd (detected via <code>git rev-parse --show-toplevel</code>).</p>
 </div>
 
 <div class="card">
