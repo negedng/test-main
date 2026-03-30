@@ -78,7 +78,7 @@ if (!values["no-sync"]) {
 
   const ciSyncPath = path.join(__dirname, "shadow-ci-sync.ts");
   const tsxPath = require.resolve("tsx/cli");
-  const result = spawnSync(process.execPath, [tsxPath, ciSyncPath], {
+  const result = spawnSync(process.execPath, [tsxPath, ciSyncPath, "-r", remote], {
     encoding: "utf8",
     stdio: ["pipe", "inherit", "inherit"],
     cwd: path.resolve(__dirname, ".."),

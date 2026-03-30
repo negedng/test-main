@@ -9,6 +9,7 @@
  *   - The repo is checked out with full history (fetch-depth: 0)
  *   - Concurrency is managed by the workflow's concurrency group
  */
+import { parseArgs } from "util";
 import {
   REMOTES,
   run, runSafe, refExists, listExternalBranches,
@@ -17,9 +18,25 @@ import {
   validateName,
 } from "./shadow-common";
 
+const { values } = parseArgs({
+  options: {
+    remote: { type: "string", short: "r" },
+  },
+  strict: true,
+});
+
+const remotesToSync = values.remote
+  ? REMOTES.filter(r => r.remote === values.remote)
+  : REMOTES;
+
+if (values.remote && remotesToSync.length === 0) {
+  console.error(`Remote '${values.remote}' not found in config.`);
+  process.exit(1);
+}
+
 let failed = 0;
 
-for (const { remote, dir, url } of REMOTES) {
+for (const { remote, dir, url } of remotesToSync) {
   validateName(remote, "Remote name");
   validateName(dir, "Directory");
 
