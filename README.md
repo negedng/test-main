@@ -34,7 +34,7 @@ npm --prefix shadow run import -- --no-sync       # skip sync, just merge curren
 
 This runs `shadow-import.ts` which:
 1. Runs ci-sync locally — fetches from external remotes and replays new commits into shadow branches (no token needed)
-2. Safely merges the shadow branch into your local branch — resets the index to HEAD with `git read-tree`, then overlays only `dir/` changes, so all other files are preserved
+2. Safely merges the shadow branch into your local branch — resets the index and working tree to HEAD with `git read-tree` + `git checkout HEAD -- .`, then overlays only `dir/` changes, so all other files are preserved
 
 **Warning:** Do **not** use a raw `git merge origin/shadow/{dir}/main`. The shadow branch only contains `dir/` files, so a raw merge would delete everything else in your repo.
 
@@ -49,10 +49,11 @@ npm --prefix shadow run export -- --no-sync                   # skip sync
 
 This runs `shadow-export.ts` which:
 1. Runs ci-sync locally to ensure the shadow branch has the latest external changes (skipped with `--no-sync`)
-2. Checks that the shadow branch is merged into your local branch (refuses otherwise)
-2. Builds a tree using git plumbing: reads only `dir/`, `.github/`, and `shadow/` from HEAD into a temp index via `git read-tree`
-3. Removes `.shadowignore` matches from the index
-4. Creates a merge commit with `git commit-tree` (two parents: shadow tip + HEAD) and pushes — CI automatically forwards to the external remote
+2. **Auto-creates the shadow branch** if it doesn't exist yet (creates an orphan branch, pushes it, and merges it into your working branch) — no need to run `shadow-setup.ts` first
+3. Checks that the shadow branch is merged into your local branch (refuses otherwise — import first)
+4. Builds a tree using git plumbing: reads only `dir/`, `.github/`, and `shadow/` from HEAD into a temp index via `git read-tree`
+5. Removes `.shadowignore` matches from the index
+6. Creates a merge commit with `git commit-tree` (two parents: shadow tip + HEAD) and pushes — CI automatically forwards to the external remote
 
 ### `.shadowignore`
 
@@ -102,7 +103,7 @@ Requires an `EXTERNAL_REPO_TOKEN` secret (a fine-grained PAT with Contents: Read
 | `-n` | Dry run — show what would change | |
 | `--no-sync` | Skip syncing external changes before export | |
 
-**shadow-setup (initial bootstrap):**
+**shadow-setup (optional bootstrap):**
 
 | Flag | Description | Default |
 |------|-------------|---------|
@@ -141,17 +142,16 @@ git remote add frontend  https://github.com/org/frontend.git
 
 ## Initial bootstrap
 
+No manual setup is needed for shadow branches — `shadow-export` automatically creates them on first use for any remote/branch combination.
+
+For the initial seed baseline (so CI sync skips existing external history), you can either:
+- **Let export handle it:** Just run `npm run export` — it creates the shadow branch and exports in one step
+- **Use setup for seed-only (optional):** `npm run setup -- -r backend` records a seed commit so CI sync knows where to start
+
 ```bash
-# 1. Run setup for each remote (records seed baseline)
-npm --prefix shadow run setup -- -r backend
-npm --prefix shadow run setup -- -r frontend
-
-# 2. Push the seed commits
-git push
-
-# 3. From now on, CI handles sync. To pull/push:
+# From now on, to pull/push:
 npm --prefix shadow run import -- -r backend
-npm --prefix shadow run export -- -r backend
+npm --prefix shadow run export -- -r backend -m "my changes"
 ```
 
 ## Troubleshooting
@@ -201,9 +201,9 @@ All shadow sync scripts live in the `shadow/` directory:
 |------|---------|
 | `shadow/shadow-config.json` | Remotes, trailers, git config overrides, limits |
 | `shadow/shadow-common.ts` | Shared config, git helpers, replay engine, lockfile |
-| `shadow/shadow-setup.ts` | Bootstrap: records seed so CI sync skips existing history |
+| `shadow/shadow-setup.ts` | Optional bootstrap: records seed so CI sync skips existing history |
 | `shadow/shadow-import.ts` | Runs ci-sync locally, then safely merges shadow branch into local (only `dir/` affected) |
-| `shadow/shadow-export.ts` | Exports local changes to shadow branch using git plumbing (with `.shadowignore` filtering) |
+| `shadow/shadow-export.ts` | Exports local changes to shadow branch using git plumbing (with `.shadowignore` filtering). Auto-creates shadow branches on first use |
 | `shadow/shadow-ci-sync.ts` | CI: replays external commits into shadow branches |
 | `shadow/shadow-ci-forward.ts` | CI: forwards shadow branch content to external remotes using git plumbing |
 | `shadow/.shadowignore` | Glob patterns for files to exclude from export |
