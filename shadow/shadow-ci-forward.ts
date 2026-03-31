@@ -16,7 +16,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
-  REMOTES, SHADOW_BRANCH_PREFIX,
+  REMOTES, SHADOW_BRANCH_PREFIX, FORWARD_TRAILER,
   git, refExists, appendTrailer,
   validateName, die,
 } from "./shadow-common";
@@ -50,10 +50,6 @@ if (!remoteEntry) {
   die(`No remote configured for directory '${dir}'. Check shadow-config.json.`);
 }
 const remote = remoteEntry.remote;
-
-if (!remoteEntry.url) {
-  die(`No URL for remote '${remote}'. Add url to shadow-config.json.`);
-}
 const resolvedUrl = remoteEntry.url;
 
 console.log(`Shadow branch : ${refName}`);
@@ -109,7 +105,7 @@ try {
   const shadowHash = git(["rev-parse", `origin/${refName}`]);
   const rawMessage = git(["log", "-1", "--format=%B", `origin/${refName}`]);
   const cleanMessage = rawMessage.split("\n").filter(l => !l.match(/^Shadow-/)).join("\n").trimEnd();
-  const message = appendTrailer(cleanMessage, `Shadow-forwarded-from: ${shadowHash}`);
+  const message = appendTrailer(cleanMessage, `${FORWARD_TRAILER}: ${shadowHash}`);
 
   // Create commit (with external branch tip as parent if it exists)
   const parentArgs = externalExists ? ["-p", git(["rev-parse", externalRef])] : [];

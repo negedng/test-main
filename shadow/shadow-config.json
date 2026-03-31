@@ -6,7 +6,8 @@
 
   "trailers": {
     "sync": "Shadow-synced-from",
-    "seed": "Shadow-seed"
+    "seed": "Shadow-seed",
+    "forward": "Shadow-forwarded-from"
   },
 
   "gitConfigOverrides": {

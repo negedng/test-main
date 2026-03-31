@@ -40,11 +40,6 @@ for (const { remote, dir, url } of remotesToSync) {
   validateName(remote, "Remote name");
   validateName(dir, "Directory");
 
-  if (!url) {
-    console.error(`⚠ No URL for remote '${remote}'. Add url to shadow-config.json. Skipping.`);
-    continue;
-  }
-
   // Add or update the git remote
   const existing = git(["remote", "get-url", remote], { safe: true });
   if (!existing.ok) {
@@ -53,11 +48,11 @@ for (const { remote, dir, url } of remotesToSync) {
     git(["remote", "set-url", remote, url]);
   }
 
-  // 3. Fetch from external remote
+  // Fetch from external remote
   console.log(`\n══ Fetching from '${remote}' ══`);
   git(["fetch", remote]);
 
-  // 4. Process each branch on the remote
+  // Process each branch on the remote
   const branches = listExternalBranches(remote);
   if (branches.length === 0) {
     console.log(`  No branches found on '${remote}'.`);
