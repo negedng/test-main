@@ -128,7 +128,23 @@ console.log(`Fetching latest from ${pushOrigin}...`);
 git(["fetch", pushOrigin]);
 
 if (!refExists(shadowRef)) {
-  die(`Shadow branch '${shadowRef}' does not exist. Run shadow-setup.ts first.`);
+  console.log(`Shadow branch '${shadowRef}' does not exist — creating it...`);
+
+  // Save current HEAD so we can return to it
+  const savedHead = git(["rev-parse", "HEAD"]);
+
+  // Create orphan shadow branch with an empty seed commit
+  git(["checkout", "--orphan", shadowBranch], { plain: true });
+  git(["reset", "--hard"], { plain: true });
+  git(["commit", "--allow-empty", "-m", `Initialize shadow branch for ${dir}/${externalBranch}`]);
+  git(["push", pushOrigin, `HEAD:refs/heads/${shadowBranch}`]);
+
+  // Return to working branch and merge the new shadow branch so ancestry check passes
+  git(["checkout", localBranch], { plain: true });
+  git(["fetch", pushOrigin, shadowBranch]);
+  git(["merge", shadowRef, "--allow-unrelated-histories", "--no-edit"]);
+
+  console.log(`✓ Created and merged ${shadowBranch}\n`);
 }
 
 // Check if latest shadow is merged into work branch (HEAD's ancestor)
