@@ -349,6 +349,18 @@ export function getShadowLog(env: TestEnv, n = 20, remote?: RemoteInfo): string 
   }
 }
 
+/** Get commit authors from the shadow branch on origin (format: "Name <email>"). */
+export function getShadowAuthors(env: TestEnv, n = 20, remote?: RemoteInfo): string {
+  const subdir = remote?.subdir ?? env.subdir;
+  const shadowBranch = `shadow/${subdir}/main`;
+  try { git(`fetch origin ${shadowBranch}`, env.localRepo); } catch { return ""; }
+  try {
+    return git(`log origin/${shadowBranch} --format="%an <%ae>" -${n}`, env.localRepo);
+  } catch {
+    return "";
+  }
+}
+
 /** Get full commit messages from the shadow branch on origin. */
 export function getShadowLogFull(env: TestEnv, n = 20, remote?: RemoteInfo): string {
   const subdir = remote?.subdir ?? env.subdir;
