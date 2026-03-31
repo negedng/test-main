@@ -176,13 +176,19 @@ try {
   git(["read-tree", `--prefix=.github/`, "HEAD:.github"], { safe: true });
   git(["read-tree", `--prefix=shadow/`, "HEAD:shadow"], { safe: true });
 
-  // Remove shadowignored files
+  // Remove shadowignored files using a temp .gitignore (lets git do the matching)
   if (ignorePatterns.length > 0) {
-    const compiled = ignorePatterns.map(globToRegex);
-    const dirFiles = git(["ls-files", "--", `${dir}/`]).split("\n").filter(Boolean);
-    const ignoredFiles = dirFiles.filter(f => compiled.some(re => re.test(f.slice(dir.length + 1))));
-    for (let i = 0; i < ignoredFiles.length; i += 100) {
-      git(["rm", "--cached", "-f", "--", ...ignoredFiles.slice(i, i + 100)], { safe: true });
+    const tmpIgnore = path.join(os.tmpdir(), `shadow-ignore-${Date.now()}`);
+    try {
+      fs.writeFileSync(tmpIgnore, ignorePatterns.join("\n") + "\n");
+      const ignored = git([
+        "ls-files", "--cached", "-i", "--exclude-from", tmpIgnore, "--", `${dir}/`,
+      ]).split("\n").filter(Boolean);
+      for (let i = 0; i < ignored.length; i += 100) {
+        git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)], { safe: true });
+      }
+    } finally {
+      fs.rmSync(tmpIgnore, { force: true });
     }
   }
 
@@ -234,14 +240,3 @@ try {
 
 console.log(`\n\u2713 Done. Exported '${dir}/' \u2192 ${pushOrigin}/${shadowBranch}`);
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function globToRegex(pattern: string): RegExp {
-  const re = pattern
-    .replace(/\*\*\/?/g, '\0')       // ** or **/ → placeholder
-    .replace(/[.+^${}()|\\]/g, '\\$&') // escape regex specials
-    .replace(/\*/g, '[^/]*')          // * → any non-slash
-    .replace(/\?/g, '[^/]')           // ? → single non-slash
-    .replace(/\0/g, '.*');            // placeholder → any path
-  return new RegExp(`^${re}$`);
-}
