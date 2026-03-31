@@ -22,7 +22,7 @@ import {
   REMOTES,
   git, refExists, appendTrailer,
   getCurrentBranch, shadowBranchName,
-  parseShadowIgnore, acquireLock, validateName, die,
+  acquireLock, validateName, die,
 } from "./shadow-common";
 
 // ── Args ──────────────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ const dirtyStaged   = !git(["diff", "--cached", "--quiet", "--", `${dir}/`], { s
 const dirtyUnstaged = !git(["diff", "--quiet", "HEAD", "--", `${dir}/`], { safe: true, plain: true }).ok;
 if (dirtyStaged || dirtyUnstaged) {
   console.error(`\u2718 '${dir}/' has uncommitted changes:\n`);
-  spawnSync("git", ["-c", "core.autocrlf=false", "status", "--short", "--", `${dir}/`], { stdio: "inherit" });
+  console.error(git(["status", "--short", "--", `${dir}/`], { plain: true }));
   console.error(`\nCommit or stash them before running shadow-export.`);
   process.exit(1);
 }
@@ -95,7 +95,7 @@ console.log(`Shadow branch : ${shadowBranch}\n`);
 
 // ── .shadowignore ─────────────────────────────────────────────────────────────
 
-const ignorePatterns = parseShadowIgnore(SCRIPT_DIR);
+const shadowIgnoreFile = path.join(SCRIPT_DIR, ".shadowignore");
 
 // ── Sync external changes ────────────────────────────────────────────────────
 
@@ -113,6 +113,7 @@ if (!values["no-sync"]) {
   });
 
   // Use checkout -f to force-restore files deleted by ci-sync's branch switching.
+  // Files not synced by ci (other remotes, AI files, etc.)
   git(["checkout", "-f", localBranch], { plain: true });
   if (stashed) git(["stash", "pop"], { safe: true, plain: true });
 
@@ -176,19 +177,13 @@ try {
   git(["read-tree", `--prefix=.github/`, "HEAD:.github"], { safe: true });
   git(["read-tree", `--prefix=shadow/`, "HEAD:shadow"], { safe: true });
 
-  // Remove shadowignored files using a temp .gitignore (lets git do the matching)
-  if (ignorePatterns.length > 0) {
-    const tmpIgnore = path.join(os.tmpdir(), `shadow-ignore-${Date.now()}`);
-    try {
-      fs.writeFileSync(tmpIgnore, ignorePatterns.join("\n") + "\n");
-      const ignored = git([
-        "ls-files", "--cached", "-i", "--exclude-from", tmpIgnore, "--", `${dir}/`,
-      ]).split("\n").filter(Boolean);
-      for (let i = 0; i < ignored.length; i += 100) {
-        git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)], { safe: true });
-      }
-    } finally {
-      fs.rmSync(tmpIgnore, { force: true });
+  // Remove shadowignored files (git handles comments and blank lines in the exclude file)
+  if (fs.existsSync(shadowIgnoreFile)) {
+    const ignored = git([
+      "ls-files", "--cached", "-i", "--exclude-from", shadowIgnoreFile, "--", `${dir}/`,
+    ]).split("\n").filter(Boolean);
+    for (let i = 0; i < ignored.length; i += 100) {
+      git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)], { safe: true });
     }
   }
 
@@ -203,7 +198,7 @@ try {
 
   // Show what changed
   console.log("\nChanges to export:");
-  spawnSync("git", ["diff-tree", "--stat", shadowTree, tree], { stdio: "inherit" });
+  console.log(git(["diff-tree", "--stat", shadowTree, tree]));
   console.log();
 
   if (dryRun) {
