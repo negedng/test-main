@@ -88,7 +88,7 @@ export function validateName(value: string, label: string): void {
 }
 
 type GitResult = { stdout: string; stderr: string; status: number; ok: boolean };
-type GitOpts = { cwd?: string; plain?: boolean; raw?: boolean; env?: Record<string, string> };
+type GitOpts = { cwd?: string; plain?: boolean; raw?: boolean; env?: Record<string, string>; input?: string };
 
 /** Run a git command. Throws on non-zero exit.
  *  Use { plain: true } to skip config overrides (for working-tree ops on Windows).
@@ -101,6 +101,7 @@ export function git(args: string[], opts?: GitOpts & { safe?: boolean }): string
   const fullArgs = opts?.plain ? args : [...GIT_CONFIG_OVERRIDES, ...args];
   const r = spawnSync("git", fullArgs, {
     encoding: "utf8", cwd: opts?.cwd ?? REPO_ROOT, maxBuffer: MAX_BUFFER, stdio: ["pipe", "pipe", "pipe"],
+    ...(opts?.input != null ? { input: opts.input } : {}),
     ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
   });
 
@@ -148,12 +149,9 @@ export function shadowBranchName(dir: string, branch: string): string {
 
 /** Append a trailer to a commit message using `git interpret-trailers`. */
 export function appendTrailer(message: string, trailer: string): string {
-  const result = spawnSync(
-    "git",
-    [...GIT_CONFIG_OVERRIDES, "interpret-trailers", "--trailer", trailer],
-    { input: message, encoding: "utf8", maxBuffer: MAX_BUFFER, stdio: ["pipe", "pipe", "pipe"] },
-  );
-  if (result.error || result.status !== 0) {
+  const result = git(["interpret-trailers", "--trailer", trailer],
+    { safe: true, input: message, raw: true });
+  if (!result.ok) {
     const trimmed = message.trimEnd();
     return `${trimmed}\n\n${trailer}\n`;
   }
@@ -328,22 +326,6 @@ function getCommitMeta(hash: string): CommitMeta {
   };
 }
 
-/** Apply a diff patch to files under a subdirectory using `git apply --directory`.
- *  Normalizes line endings to LF before applying. Returns true if the patch applied cleanly. */
-function applyPatch(patch: string, subdir: string): boolean {
-  const normalizedPatch = patch.replace(/\r\n/g, "\n");
-  const tmpPatch = path.join(os.tmpdir(), `shadow-patch-${process.pid}.patch`);
-  fs.writeFileSync(tmpPatch, normalizedPatch);
-
-  try {
-    return git(["apply", "--directory", subdir, "--ignore-whitespace", tmpPatch], { safe: true }).ok;
-  } finally {
-    try { fs.unlinkSync(tmpPatch); } catch (e: any) {
-      if (e.code !== "ENOENT") console.warn(`Warning: failed to delete temp patch: ${e.message}`);
-    }
-  }
-}
-
 function diffForCommit(meta: CommitMeta): string {
   const { hash, parentCount } = meta;
   const diffArgs = ["-c", "core.filemode=false",
@@ -368,15 +350,14 @@ function commitWithMeta(meta: CommitMeta, message: string, allowEmpty = false): 
   });
 }
 
-function extractPatchFiles(patch: string, subdir: string): string[] {
-  const files = new Set<string>();
-  for (const line of patch.split("\n")) {
-    const m = line.match(/^diff --git a\/.+ b\/(.+)$/) ?? line.match(/^--- a\/(.+)$/);
-    if (m && m[1] !== "/dev/null" && !m[1].includes("..") && !m[1].startsWith("/")) {
-      files.add(`${subdir}/${m[1]}`);
-    }
-  }
-  return [...files];
+function filesForCommit(meta: CommitMeta, subdir: string): string[] {
+  const { hash, parentCount } = meta;
+  const nameArgs = ["-c", "core.filemode=false",
+    "diff", "--name-only", "-M", "--no-ext-diff", "--no-textconv"];
+  const raw = parentCount === 0
+    ? git([...nameArgs, EMPTY_TREE, hash])
+    : git([...nameArgs, `${hash}^1`, hash]);
+  return raw.split("\n").filter(Boolean).map(f => `${subdir}/${f}`);
 }
 
 const SYNCED_HASH_RE = new RegExp(`^${SYNC_TRAILER}:\\s*([0-9a-f]{7,40})`);
@@ -491,14 +472,16 @@ export function replayCommits(opts: {
     // Generate a diff for this commit and apply it under the subdirectory.
     // The patch maps external repo root paths into {dir}/ in the monorepo.
     const patch = diffForCommit(meta);
-    const result = applyPatch(patch, dir);
+    // Apply patch via stdin, normalizing CRLF → LF for cross-OS consistency
+    const result = git(["apply", "--directory", dir, "--ignore-whitespace"],
+      { safe: true, input: patch.replace(/\r\n/g, "\n") }).ok;
 
     if (!result) {
       throw new Error(`Could not apply patch for ${meta.short}. Shadow branch may be out of sync.`);
     }
 
     // Stage only the files touched by this patch (not the whole dir).
-    const patchFiles = extractPatchFiles(patch, dir);
+    const patchFiles = filesForCommit(meta, dir);
     if (patchFiles.length > 0) {
       git(["add", "--", ...patchFiles]);
     }
