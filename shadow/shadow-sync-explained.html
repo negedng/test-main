@@ -830,8 +830,8 @@
 </div>
 
 <div class="card card-purple">
-  <div class="fn-sig" id="fn-extractPatchFiles"><span class="tag tag-purple">private</span> extractPatchFiles(patch: string, subdir: string): string[] <a class="src-link" href="shadow-common.ts#L363">[source:363]</a></div>
-  <p>Parses a patch to find which files were modified. Used to <code>git add</code> only the affected files (not the entire repo). Validates paths to prevent directory traversal attacks (<code>..</code> or absolute paths).</p>
+  <div class="fn-sig" id="fn-filesForCommit"><span class="tag tag-purple">private</span> filesForCommit(meta: CommitMeta, subdir: string): string[] <a class="src-link" href="shadow-common.ts#L371">[source:371]</a></div>
+  <p>Uses <code>git diff --name-only</code> to find which files were modified by a commit. Used to <code>git add</code> only the affected files (not the entire repo).</p>
 </div>
 
 <div class="card card-purple">
@@ -858,7 +858,7 @@
     <li>Find the seed hash (via <a href="#fn-findSeedHash"><code>findSeedHash</code></a>)</li>
     <li>Collect all external commits that need replaying (via <a href="#fn-collectExternalCommits"><code>collectExternalCommits</code></a>)</li>
     <li>Filter out already-synced ones</li>
-    <li>For each new commit: <a href="#fn-diffForCommit">generate patch</a> &rarr; <a href="#fn-applyPatch">apply to subdirectory</a> &rarr; <a href="#fn-extractPatchFiles">stage files</a> &rarr; <a href="#fn-commitWithMeta">commit with original metadata</a> + sync trailer</li>
+    <li>For each new commit: <a href="#fn-diffForCommit">generate patch</a> &rarr; <a href="#fn-applyPatch">apply to subdirectory</a> &rarr; <a href="#fn-filesForCommit">stage files</a> &rarr; <a href="#fn-commitWithMeta">commit with original metadata</a> + sync trailer</li>
     <li>Handle empty patches (the commit exists in the external repo but produces no changes in our context) by recording an empty commit</li>
   </ol>
   <p>Returns how many commits were mirrored and whether we were already up to date.</p>
