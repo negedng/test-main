@@ -20,6 +20,7 @@ import * as os from "os";
 import { spawnSync } from "child_process";
 import {
   REMOTES,
+  SHADOW_BRANCH_PREFIX, EXPORT_TRAILER,
   git, refExists, appendTrailer,
   getCurrentBranch, shadowBranchName,
   acquireLock, validateName, die,
@@ -159,8 +160,7 @@ if (!git(["merge-base", "--is-ancestor", shadowRef, "HEAD"], { safe: true }).ok)
 }
 
 // ── Build tree using temp index ───────────────────────────────────────────────
-// Instead of a worktree + merge + cleanup, we use git plumbing:
-// read only the subtrees we want into a temp index, write a tree, and
+// Read only the subtrees we want into a temp index, write a tree, and
 // create a merge commit with commit-tree. No files touch disk.
 
 const headCommit = git(["rev-parse", "HEAD"]);
@@ -175,7 +175,7 @@ try {
   git(["read-tree", "--empty"]);
   git(["read-tree", `--prefix=${dir}/`, `HEAD:${dir}`]);
   git(["read-tree", `--prefix=.github/`, "HEAD:.github"], { safe: true });
-  git(["read-tree", `--prefix=shadow/`, "HEAD:shadow"], { safe: true });
+  git(["read-tree", `--prefix=${SHADOW_BRANCH_PREFIX}/`, `HEAD:${SHADOW_BRANCH_PREFIX}`], { safe: true });
 
   // Remove shadowignored files (git handles comments and blank lines in the exclude file)
   if (fs.existsSync(shadowIgnoreFile)) {
@@ -218,7 +218,7 @@ try {
 
   // Create merge commit (two parents: shadow tip + HEAD)
   // Add trailer so the forward workflow knows this push should be forwarded
-  const finalMessage = appendTrailer(message, "Shadow-export: true");
+  const finalMessage = appendTrailer(message, `${EXPORT_TRAILER}: true`);
   const newCommit = git(["commit-tree", tree, "-p", shadowTip, "-p", headCommit, "-m", finalMessage]);
 
   // Push

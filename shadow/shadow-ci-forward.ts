@@ -120,7 +120,7 @@ try {
     die(`git push to ${remote}/${externalBranch} failed.`);
   }
 
-  console.log(`\n✓ Done. Forwarded shadow/${dir}/${externalBranch} → ${remote}/${externalBranch}.`);
+  console.log(`\n✓ Done. Forwarded ${SHADOW_BRANCH_PREFIX}/${dir}/${externalBranch} → ${remote}/${externalBranch}.`);
 } finally {
   delete process.env.GIT_INDEX_FILE;
   fs.rmSync(tmpIndex, { force: true });

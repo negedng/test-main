@@ -17,7 +17,7 @@ interface RemoteConfig {
 
 interface ShadowSyncConfig {
   remotes: RemoteConfig[];
-  trailers: { sync: string; seed: string; forward: string };
+  trailers: { sync: string; seed: string; forward: string; exp: string };
   gitConfigOverrides: Record<string, string>;
   maxBuffer: number;
   maxDirDepth: number;
@@ -35,6 +35,7 @@ function loadConfig(): ShadowSyncConfig {
       sync: ((doc.trailers as Record<string, string>)?.sync) ?? "Shadow-synced-from",
       seed: ((doc.trailers as Record<string, string>)?.seed) ?? "Shadow-seed",
       forward: ((doc.trailers as Record<string, string>)?.forward) ?? "Shadow-forwarded-from",
+      exp: ((doc.trailers as Record<string, string>)?.export) ?? "Shadow-export",
     },
     gitConfigOverrides: (doc.gitConfigOverrides as Record<string, string>) ?? {},
     maxBuffer:          (doc.maxBuffer as number) ?? 50 * 1024 * 1024,
@@ -49,6 +50,7 @@ export const REMOTES: RemoteConfig[] = [...config.remotes];
 const SYNC_TRAILER    = config.trailers.sync;
 export const SEED_TRAILER    = config.trailers.seed;
 export const FORWARD_TRAILER = config.trailers.forward;
+export const EXPORT_TRAILER  = config.trailers.exp;
 export const SHADOW_BRANCH_PREFIX = config.shadowBranchPrefix;
 
 // Allow tests to inject config via environment variable (JSON array of RemoteConfig).
@@ -374,7 +376,7 @@ function buildAlreadySyncedSetFor(dir: string): Set<string> {
   return synced;
 }
 
-const SEED_HASH_RE = /^Shadow-seed:\s*(\S+)\s+([0-9a-f]{7,40})/;
+const SEED_HASH_RE = new RegExp(`^${SEED_TRAILER}:\\s*(\\S+)\\s+([0-9a-f]{7,40})`);
 
 function findSeedHash(dir: string): string | null {
   const log = git(["log", "--all", `--grep=^${SEED_TRAILER}:`, "--format=%B"], { safe: true });
@@ -453,7 +455,8 @@ export function replayCommits(opts: {
     if (meta.message.includes(`${FORWARD_TRAILER}:`)) {
       console.log(`  Skipping ${meta.short} (forwarded by us).`);
       alreadySynced.add(hash);
-      const cleanMsg = meta.message.split("\n").filter(l => !l.match(/^Shadow-/)).join("\n").trimEnd();
+      const trailerPrefixes = [SYNC_TRAILER, SEED_TRAILER, FORWARD_TRAILER, EXPORT_TRAILER];
+      const cleanMsg = meta.message.split("\n").filter(l => !trailerPrefixes.some(t => l.startsWith(`${t}:`))).join("\n").trimEnd();
       const syncedMessage = appendTrailer(cleanMsg, `${SYNC_TRAILER}: ${hash}`);
       commitWithMeta(meta, syncedMessage, true);
       continue;
