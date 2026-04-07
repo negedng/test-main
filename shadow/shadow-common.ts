@@ -362,10 +362,12 @@ function filesForCommit(meta: CommitMeta, subdir: string): string[] {
 
 const SYNCED_HASH_RE = new RegExp(`^${SYNC_TRAILER}:\\s*([0-9a-f]{7,40})`);
 
-function buildAlreadySyncedSetFor(dir: string): Set<string> {
+function buildAlreadySyncedSetFor(dir: string, seedHash?: string): Set<string> {
   const synced = new Set<string>();
   const log = git(
-    ["log", `--grep=^${SYNC_TRAILER}:`, "--format=%B", "--", `${dir}/`], { safe: true }
+    ["log", `--grep=^${SYNC_TRAILER}:`, "--format=%B",
+     ...(seedHash ? [`${seedHash}..HEAD`] : []),
+     "--", `${dir}/`], { safe: true }
   );
   if (!log.ok || !log.stdout) return synced;
 
@@ -420,16 +422,17 @@ export function replayCommits(opts: {
   const { remote, dir, externalBranch } = opts;
   const externalRef = `${remote}/${externalBranch}`;
 
-  // Scans local git log for Shadow-synced-from trailers to avoid re-replaying commits.
-  console.log("Scanning local history for already-mirrored commits...");
-  const alreadySynced = buildAlreadySyncedSetFor(dir);
-  console.log(`Found ${alreadySynced.size} previously mirrored commit(s).`);
-
   // A seed marks the starting point for sync — all commits before it are skipped.
   const seedHash = findSeedHash(dir);
   if (seedHash) {
     console.log(`Found seed baseline: ${seedHash.slice(0, 10)} (skipping earlier history).`);
   }
+
+  // Scans local git log for Shadow-synced-from trailers to avoid re-replaying commits.
+  // When a seed exists, only scan commits after it.
+  console.log("Scanning local history for already-mirrored commits...");
+  const alreadySynced = buildAlreadySyncedSetFor(dir, seedHash ?? undefined);
+  console.log(`Found ${alreadySynced.size} previously mirrored commit(s).`);
 
   // Collect new commits to replay
   const allExternalCommits = collectExternalCommits(externalRef, seedHash ?? undefined);
