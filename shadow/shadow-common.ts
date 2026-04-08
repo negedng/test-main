@@ -515,3 +515,202 @@ export function replayCommits(opts: {
 
   return { mirrored: newCommits.length, upToDate: false };
 }
+
+// ── Topology-preserving replay engine ────────────────────────────────────────
+
+interface TopoCommit {
+  hash: string;
+  parents: string[];
+}
+
+/**
+ * Build a mapping of external SHA → local SHA from existing synced commits.
+ * Scans ALL branches (--all) so the mapping is global across shadow branches.
+ */
+function buildSyncedMapping(dir: string): Map<string, string> {
+  const mapping = new Map<string, string>();
+  const MARKER = "SHADOWMAP ";
+  const log = git(
+    ["log", "--all", `--grep=^${SYNC_TRAILER}:`, `--format=${MARKER}%H%n%B`, "--", `${dir}/`],
+    { safe: true },
+  );
+  if (!log.ok || !log.stdout) return mapping;
+
+  let currentLocal: string | null = null;
+  for (const line of log.stdout.split("\n")) {
+    if (line.startsWith(MARKER)) {
+      currentLocal = line.slice(MARKER.length).trim();
+      continue;
+    }
+    const match = line.match(SYNCED_HASH_RE);
+    if (match && currentLocal) {
+      mapping.set(match[1], currentLocal);
+    }
+  }
+  return mapping;
+}
+
+/**
+ * Collect all commits across multiple branches in topological order (parents first).
+ * Uses `git rev-list --topo-order --reverse --parents` for a single traversal
+ * that automatically deduplicates shared commits.
+ */
+function collectAllExternalCommits(
+  remote: string,
+  branches: string[],
+  seedHash?: string,
+): TopoCommit[] {
+  const refs = branches.map(b => `${remote}/${b}`);
+  const args = ["rev-list", "--topo-order", "--reverse", "--parents"];
+  if (seedHash) {
+    args.push(`^${seedHash}`);
+  }
+  args.push(...refs);
+
+  const result = git(args, { safe: true });
+  if (!result.ok || !result.stdout) return [];
+
+  return result.stdout.split("\n").filter(Boolean).map(line => {
+    const parts = line.split(/\s+/);
+    return { hash: parts[0], parents: parts.slice(1) };
+  });
+}
+
+/**
+ * Map each branch name to the local SHA corresponding to its external HEAD.
+ */
+function buildBranchMapping(
+  remote: string,
+  branches: string[],
+  shaMapping: Map<string, string>,
+): Map<string, string> {
+  const branchMapping = new Map<string, string>();
+  for (const branch of branches) {
+    const headSHA = git(["rev-parse", `${remote}/${branch}`]);
+    const localSHA = shaMapping.get(headSHA);
+    if (localSHA) branchMapping.set(branch, localSHA);
+  }
+  return branchMapping;
+}
+
+/**
+ * Replay commits from multiple external branches into a local subdirectory,
+ * preserving the original DAG topology (shared ancestors stay shared).
+ *
+ * Instead of checking out branches and cherry-picking, this uses git plumbing:
+ *   - `git read-tree --prefix` to scope external trees under {dir}/
+ *   - `git commit-tree` to create commits with explicit parents
+ *   - `git update-ref` (by caller) to point shadow branches at the right tips
+ *
+ * Returns a branchMapping so the caller can update each shadow branch ref.
+ */
+export function replayCommitsTopological(opts: {
+  remote: string;
+  dir: string;
+  branches: string[];
+}): { mirrored: number; branchMapping: Map<string, string>; upToDate: boolean } {
+  const { remote, dir, branches } = opts;
+
+  console.log("Scanning local history for already-mirrored commits...");
+  const shaMapping = buildSyncedMapping(dir);
+  console.log(`Found ${shaMapping.size} previously mirrored commit(s).`);
+
+  const seedHash = findSeedHash(dir);
+  if (seedHash) {
+    console.log(`Found seed baseline: ${seedHash.slice(0, 10)} (skipping earlier history).`);
+  }
+
+  const allCommits = collectAllExternalCommits(remote, branches, seedHash ?? undefined);
+  const newCommits = allCommits.filter(c => !shaMapping.has(c.hash));
+
+  if (newCommits.length === 0) {
+    const branchMapping = buildBranchMapping(remote, branches, shaMapping);
+    return { mirrored: 0, branchMapping, upToDate: true };
+  }
+
+  console.log(`Found ${newCommits.length} new commit(s) to mirror.\n`);
+
+  // Find an existing shadow branch tip to graft root commits onto.
+  // This maintains ancestry with origin/main so export's pre-flight check passes.
+  let graftBase: string | null = null;
+  for (const branch of branches) {
+    const shadow = shadowBranchName(dir, branch);
+    const ref = refExists(`origin/${shadow}`)
+      ? git(["rev-parse", `origin/${shadow}`])
+      : null;
+    if (ref) { graftBase = ref; break; }
+  }
+
+  const tmpIndex = path.join(os.tmpdir(), `shadow-topo-idx-${Date.now()}`);
+
+  try {
+    for (const commit of newCommits) {
+      const meta = getCommitMeta(commit.hash);
+      const isForwarded = meta.message.includes(`${FORWARD_TRAILER}:`);
+
+      if (isForwarded) {
+        console.log(`  Skipping ${meta.short} (forwarded by us).`);
+      } else {
+        const label = commit.parents.length > 1
+          ? `merge commit ${meta.short}`
+          : commit.parents.length === 0
+            ? `root commit ${meta.short}`
+            : meta.short;
+        console.log(`  Applying ${label}...`);
+      }
+
+      // Build scoped tree: external tree placed under {dir}/
+      git(["read-tree", "--empty"], { env: { GIT_INDEX_FILE: tmpIndex } });
+      git(["read-tree", `--prefix=${dir}/`, `${commit.hash}^{tree}`], { env: { GIT_INDEX_FILE: tmpIndex } });
+      const tree = git(["write-tree"], { env: { GIT_INDEX_FILE: tmpIndex } });
+
+      // Build commit message with sync trailer
+      let message: string;
+      if (isForwarded) {
+        const cleanMsg = meta.message.split("\n").filter(l => !l.match(/^Shadow-/)).join("\n").trimEnd();
+        message = appendTrailer(cleanMsg, `${SYNC_TRAILER}: ${commit.hash}`);
+      } else {
+        message = appendTrailer(meta.message, `${SYNC_TRAILER}: ${commit.hash}`);
+      }
+
+      // Map external parents → local parents
+      const localParents: string[] = [];
+      for (const parentHash of commit.parents) {
+        const localParent = shaMapping.get(parentHash);
+        if (localParent) {
+          localParents.push(localParent);
+        }
+      }
+
+      // Graft root commits (no mapped parents) onto existing shadow tip
+      if (localParents.length === 0 && graftBase) {
+        localParents.push(graftBase);
+      }
+
+      // Create commit with explicit parents via git plumbing
+      const parentArgs = localParents.flatMap(p => ["-p", p]);
+      const newSHA = git(["commit-tree", tree, ...parentArgs, "-m", message], {
+        env: {
+          GIT_AUTHOR_NAME:      meta.authorName,
+          GIT_AUTHOR_EMAIL:     meta.authorEmail,
+          GIT_AUTHOR_DATE:      meta.authorDate,
+          GIT_COMMITTER_NAME:   meta.committerName,
+          GIT_COMMITTER_EMAIL:  meta.committerEmail,
+          GIT_COMMITTER_DATE:   meta.committerDate,
+        },
+      });
+
+      shaMapping.set(commit.hash, newSHA);
+      console.log(isForwarded ? "  ✓ Recorded." : "  ✓ Mirrored.");
+    }
+  } finally {
+    fs.rmSync(tmpIndex, { force: true });
+  }
+
+  const branchMapping = buildBranchMapping(remote, branches, shaMapping);
+
+  console.log();
+  console.log(`Done. ${newCommits.length} commit(s) mirrored with preserved topology.`);
+
+  return { mirrored: newCommits.length, branchMapping, upToDate: false };
+}

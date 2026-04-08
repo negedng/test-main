@@ -10,11 +10,14 @@
  *   - Concurrency is managed by the workflow's concurrency group
  */
 import { parseArgs } from "util";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   REMOTES,
   git, refExists, listExternalBranches,
   shadowBranchName,
-  replayCommits, preflightChecks, handlePreflightResults,
+  replayCommitsTopological, preflightChecks, handlePreflightResults,
   validateName,
 } from "./shadow-common";
 
@@ -59,52 +62,107 @@ for (const { remote, dir, url } of remotesToSync) {
     continue;
   }
 
+  // Pre-flight checks — collect branches that pass
+  const validBranches: string[] = [];
   for (const branch of branches) {
     const externalRef = `${remote}/${branch}`;
-    const shadow = shadowBranchName(dir, branch);
-
-    console.log(`\n── ${externalRef} → ${shadow} ──`);
-
-    // Pre-flight checks
+    console.log(`\n── Preflight: ${externalRef} ──`);
     const warnings = preflightChecks(externalRef);
-    if (!handlePreflightResults(warnings)) {
+    if (handlePreflightResults(warnings)) {
+      validBranches.push(branch);
+    } else {
       console.error(`  Skipping ${externalRef} due to preflight errors.`);
       failed++;
-      continue;
     }
+  }
 
-    // Check out the shadow branch (from origin if it exists, or create from main)
-    if (refExists(`origin/${shadow}`)) {
-      git(["checkout", "-B", shadow, `origin/${shadow}`]);
-    } else {
-      git(["checkout", "-B", shadow, "origin/main"]);
-    }
+  if (validBranches.length === 0) continue;
 
-    // Run the per-commit replay
-    try {
-      // Capture tree before replay to detect if anything actually changed
-      const treeBefore = git(["rev-parse", "HEAD^{tree}"]);
-      const result = replayCommits({ remote, dir, externalBranch: branch });
-      const treeAfter = git(["rev-parse", "HEAD^{tree}"]);
+  // Replay all commits across all branches in topological order.
+  // This preserves shared ancestors so shadow branches have correct DAG topology.
+  try {
+    console.log(`\n── Replaying commits for ${remote} (${validBranches.length} branch(es)) ──`);
+    const result = replayCommitsTopological({ remote, dir, branches: validBranches });
 
-      if (result.upToDate) {
-        console.log(`  ${shadow} is up to date.`);
-      } else if (treeBefore === treeAfter) {
-        console.log(`  ${result.mirrored} commit(s) mirrored but no tree changes (all forwarded). Skipping push.`);
-      } else {
-        console.log(`  Pushing ${result.mirrored} new commit(s) to origin/${shadow}...`);
-        git(["push", "origin", `${shadow}:${shadow}`]);
-        console.log(`  ✓ Pushed.`);
+    // Update each shadow branch ref and push
+    for (const branch of validBranches) {
+      const shadow = shadowBranchName(dir, branch);
+      const localSHA = result.branchMapping.get(branch);
+
+      if (!localSHA) {
+        console.log(`  ${shadow}: no mapping found, skipping.`);
+        continue;
       }
-    } catch (err: any) {
-      console.error(`  ✘ Failed to replay ${externalRef}: ${err.message}`);
-      failed++;
-      // Reset any partial state before moving to next branch
-      git(["reset", "--hard"], { safe: true });
-    }
 
-    // Return to detached HEAD so we can check out the next shadow branch
-    git(["checkout", "--detach"], { safe: true });
+      // Check if update is needed
+      const currentSHA = refExists(`origin/${shadow}`)
+        ? git(["rev-parse", `origin/${shadow}`])
+        : null;
+
+      if (currentSHA === localSHA) {
+        console.log(`  ${shadow} is up to date.`);
+        continue;
+      }
+
+      if (currentSHA) {
+        // If our sync tip is already an ancestor of origin (e.g. export added
+        // commits on top), origin is ahead — nothing to push.
+        const isAncestor = git(
+          ["merge-base", "--is-ancestor", localSHA, currentSHA], { safe: true },
+        ).ok;
+        if (isAncestor) {
+          console.log(`  ${shadow} is up to date (origin is ahead or equal).`);
+          continue;
+        }
+
+        // Detect tree-only changes (all forwarded commits produce same tree)
+        const oldTree = git(["rev-parse", `${currentSHA}^{tree}`]);
+        const newTree = git(["rev-parse", `${localSHA}^{tree}`]);
+        if (oldTree === newTree) {
+          console.log(`  ${shadow}: no tree changes (all forwarded). Skipping push.`);
+          continue;
+        }
+      }
+
+      // Check if push would be fast-forward
+      let pushSHA = localSHA;
+      if (currentSHA) {
+        const isFF = git(
+          ["merge-base", "--is-ancestor", currentSHA, localSHA], { safe: true },
+        ).ok;
+        if (!isFF) {
+          // Origin has diverged (e.g. export added merge commits on top).
+          // Three-way merge: keeps exported content (ours=origin) while
+          // applying new external changes (theirs=synced chain).
+          console.log(`  ${shadow}: origin diverged, creating merge to reconcile...`);
+          const mergeBase = git(["merge-base", currentSHA, localSHA]);
+          const tmpIdx = path.join(os.tmpdir(), `shadow-merge-idx-${Date.now()}`);
+          try {
+            git(["read-tree", "-m",
+              `${mergeBase}^{tree}`, `${currentSHA}^{tree}`, `${localSHA}^{tree}`],
+              { env: { GIT_INDEX_FILE: tmpIdx } },
+            );
+            const mergeTree = git(["write-tree"], { env: { GIT_INDEX_FILE: tmpIdx } });
+            pushSHA = git([
+              "commit-tree", mergeTree,
+              "-p", currentSHA, "-p", localSHA,
+              "-m", `Merge synced commits into ${shadow}`,
+            ]);
+          } finally {
+            fs.rmSync(tmpIdx, { force: true });
+          }
+        }
+      }
+
+      // Point shadow branch at the (possibly merged) commit and push
+      git(["update-ref", `refs/heads/${shadow}`, pushSHA]);
+      console.log(`  Pushing to origin/${shadow}...`);
+      git(["push", "origin", `${shadow}:${shadow}`]);
+      console.log(`  ✓ Pushed.`);
+    }
+  } catch (err: any) {
+    console.error(`  ✘ Failed to replay for ${remote}: ${err.message}`);
+    failed++;
   }
 
   // Detect stale shadow branches (remote branch was deleted but shadow/ remains)
