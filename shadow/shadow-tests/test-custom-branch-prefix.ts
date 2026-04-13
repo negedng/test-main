@@ -1,10 +1,9 @@
-import { createTestEnv, commitOnRemote, commitOnLocal, runCiSync, mergeShadow, runPush, runCiForward, readShadowFile, getShadowLogFull, pullRemoteWorking, readRemoteFile } from "./harness";
+import { createTestEnv, commitOnRemote, commitOnLocal, runCiSync, mergeShadow, runPush, readShadowFile, readExternalShadowFile, getExternalShadowLogFull, pullRemoteWorking, readRemoteFile } from "./harness";
 import { assertEqual, assertIncludes } from "./assert";
 
 /**
  * Verifies that a non-default shadowBranchPrefix (e.g. "shd") works
- * end-to-end: ci-sync pull, export, and ci-forward all use the configured
- * prefix instead of the hardcoded "shadow".
+ * end-to-end: ci-sync pull, export (which now pushes directly to external).
  */
 export default function run() {
   const env = createTestEnv("custom-prefix", "frontend", "shd");
@@ -16,40 +15,29 @@ export default function run() {
     assertIncludes(r1.stdout, "shd/frontend/main", "ci-sync output should reference custom prefix branch");
     mergeShadow(env);
 
-    // Verify the file arrived locally
+    // Verify the file arrived on origin's shadow branch (import side)
     assertEqual(
       readShadowFile(env, "hello.txt"),
       "from external\n",
       "hello.txt should be on the custom-prefix shadow branch",
     );
 
-    // 2) Push: local commit → export → shadow branch under "shd/" prefix
+    // 2) Push: local commit → export → external's shadow branch
     commitOnLocal(env, { "feature.ts": "export const x = 1;\n" }, "Add feature");
     const r2 = runPush(env, "Push feature");
     assertEqual(r2.status, 0, "export should succeed with custom prefix");
-    assertIncludes(r2.stdout, "shd/frontend/main", "export output should reference custom prefix branch");
+    assertIncludes(r2.stdout, "shd/main", "export output should reference custom prefix branch on external");
 
+    // Verify on external's shadow branch (export side — no prefix)
     assertEqual(
-      readShadowFile(env, "feature.ts"),
+      readExternalShadowFile(env, "feature.ts"),
       "export const x = 1;\n",
-      "feature.ts should appear on the custom-prefix shadow branch",
+      "feature.ts should appear on the external's shadow branch",
     );
 
-    // Export commit should have the export trailer
-    const shadowLog = getShadowLogFull(env);
-    assertIncludes(shadowLog, "Shadow-export:", "shadow commit should have export trailer");
-
-    // 3) Forward: shadow branch → external remote
-    const r3 = runCiForward(env);
-    assertEqual(r3.status, 0, "ci-forward should succeed with custom prefix");
-    assertIncludes(r3.stdout, "shd/frontend/main", "ci-forward output should reference custom prefix branch");
-
-    pullRemoteWorking(env);
-    assertEqual(
-      readRemoteFile(env, "feature.ts"),
-      "export const x = 1;\n",
-      "feature.ts should arrive on the external remote",
-    );
+    // Export commit should have the forward trailer
+    const shadowLog = getExternalShadowLogFull(env);
+    assertIncludes(shadowLog, "Shadow-forwarded-from:", "shadow commit should have forward trailer");
   } finally {
     env.cleanup();
   }

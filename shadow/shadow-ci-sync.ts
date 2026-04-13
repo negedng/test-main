@@ -10,9 +10,6 @@
  *   - Concurrency is managed by the workflow's concurrency group
  */
 import { parseArgs } from "util";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
 import {
   REMOTES,
   git, refExists, listExternalBranches,
@@ -132,25 +129,17 @@ for (const { remote, dir, url } of remotesToSync) {
         ).ok;
         if (!isFF) {
           // Origin has diverged (e.g. export added merge commits on top).
-          // Three-way merge: keeps exported content (ours=origin) while
-          // applying new external changes (theirs=synced chain).
+          // Create a merge commit that uses the synced commit's tree — it has
+          // the full repo tree with the correct dir/ content. The export commit's
+          // tree is partial (only dir/ + .github/ + shadow/) so we don't try a
+          // 3-way merge which would conflict on files outside dir/.
           console.log(`  ${shadow}: origin diverged, creating merge to reconcile...`);
-          const mergeBase = git(["merge-base", currentSHA, localSHA]);
-          const tmpIdx = path.join(os.tmpdir(), `shadow-merge-idx-${Date.now()}`);
-          try {
-            git(["read-tree", "-m",
-              `${mergeBase}^{tree}`, `${currentSHA}^{tree}`, `${localSHA}^{tree}`],
-              { env: { GIT_INDEX_FILE: tmpIdx } },
-            );
-            const mergeTree = git(["write-tree"], { env: { GIT_INDEX_FILE: tmpIdx } });
-            pushSHA = git([
-              "commit-tree", mergeTree,
-              "-p", currentSHA, "-p", localSHA,
-              "-m", `Merge synced commits into ${shadow}`,
-            ]);
-          } finally {
-            fs.rmSync(tmpIdx, { force: true });
-          }
+          const syncedTree = git(["rev-parse", `${localSHA}^{tree}`]);
+          pushSHA = git([
+            "commit-tree", syncedTree,
+            "-p", currentSHA, "-p", localSHA,
+            "-m", `Merge synced commits into ${shadow}`,
+          ]);
         }
       }
 

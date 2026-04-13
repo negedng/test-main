@@ -303,7 +303,7 @@
 <br><br>
 <span class="dim">PUSHING (us &rarr; external):</span>
 <br>
-<span class="green">Your Branch</span> &mdash;<span class="dim">[ shadow-export + .shadowignore ]</span>&mdash;&rarr; <span class="highlight">Shadow Branch</span> &mdash;<span class="dim">[ CI forward ]</span>&mdash;&rarr; <span class="orange">External Repo</span>
+<span class="green">Your Branch</span> &mdash;<span class="dim">[ CI forward (commit-by-commit replay, strip prefix) ]</span>&mdash;&rarr; <span class="orange">External Shadow Branch</span> &mdash;<span class="dim">[ git merge ]</span>&mdash;&rarr; <span class="orange">External Main</span>
 </div>
 
 <div class="card card-green">
@@ -452,8 +452,7 @@
   </div>
   <div class="flow-step">
     <div class="flow-num">6</div>
-    <div><strong>You import locally.</strong> Run <code>npm run import</code> (or <code>npm run import -- -r backend</code>) to merge external changes into your working branch. This uses <a href="#fn-pull"><code>shadow-import.ts</code></a> which merges the shadow branch but restores non-<code>dir/</code> files so only <code>backend/</code> is affected.
-    <p style="margin-top:0.5rem"><strong>Warning:</strong> Do <strong>not</strong> use a plain <code>git merge origin/shadow/backend/main</code> &mdash; the shadow branch's tree only contains <code>backend/</code> files, so a raw merge would delete all your other files (scripts, config, tests, etc.).</p></div>
+    <div><strong>You import locally.</strong> Run <code>git merge origin/shadow/backend/main</code> to merge external changes into your working branch. Shadow branches now carry the full repo tree (with <code>backend/</code> overlaid from external commits), so a plain merge works &mdash; git finds the seed commit as the merge base and only <code>backend/</code> files differ. A thin convenience wrapper is available at <code>npm run import</code>.</div>
   </div>
 </div>
 
@@ -462,23 +461,19 @@
 <div class="card card-orange">
   <div class="flow-step">
     <div class="flow-num">1</div>
-    <div><strong>You run <code>npm run export -- -m "message"</code></strong> locally. This runs <a href="#fn-export"><code>shadow-export.ts</code></a>. (The <code>--</code> tells npm to pass everything after it to the script, rather than treating it as npm's own flags.)</div>
+    <div><strong>Run <code>npm run ci-forward</code></strong> (locally or in CI). This runs <a href="#fn-ci-forward"><code>shadow-ci-forward.ts</code></a>, the mirror of ci-sync.</div>
   </div>
   <div class="flow-step">
     <div class="flow-num">2</div>
-    <div><strong>Build tree using temp index.</strong> Instead of a worktree or merge, the script uses git plumbing commands with a temporary index file (set via <code>GIT_INDEX_FILE</code>). It runs <code>git read-tree --empty</code> to start clean, then <code>git read-tree --prefix=dir/ HEAD:dir</code> to read only the wanted subtrees into the index. It also reads <code>.github/</code> and <code>shadow/</code> for CI dependencies.</div>
+    <div><strong>Collect local commits.</strong> Finds all commits on your branch since the seed that touch <code>dir/</code>, in topological order. Skips commits that came from external (have <code>Shadow-synced-from</code> trailer) and commits already forwarded (tracked via <code>Shadow-forwarded-from</code> trailers on the external shadow branch).</div>
   </div>
   <div class="flow-step">
     <div class="flow-num">3</div>
-    <div><strong>Filter and write tree.</strong> Files matching <code>.shadowignore</code> patterns are removed from the index via <code>git rm --cached</code>. Then <code>git write-tree</code> creates a tree object from the index. The tree is compared against the shadow branch's tree (<code>git rev-parse shadowRef^{tree}</code>) to check whether there are any actual changes to export.</div>
+    <div><strong>Replay commits (prefix-stripping).</strong> For each new commit: reads the <code>dir/</code> subtree at root level (stripping the prefix &mdash; so <code>backend/src/app.ts</code> becomes <code>src/app.ts</code>), applies <code>.shadowignore</code> filtering, maps parents to external SHAs, and creates a commit via <code>git commit-tree</code> with original author metadata + a <code>Shadow-forwarded-from</code> trailer.</div>
   </div>
   <div class="flow-step">
     <div class="flow-num">4</div>
-    <div><strong>Create merge commit and push.</strong> Uses <code>git commit-tree</code> with two parents (shadow branch tip + HEAD) to create a proper merge commit without needing a working directory. The commit is pushed directly to origin. No retry loop &mdash; if the push fails (non-fast-forward), the user must merge the shadow branch and retry.</div>
-  </div>
-  <div class="flow-step">
-    <div class="flow-num">5</div>
-    <div><strong>CI forward triggers automatically.</strong> The push to <code>shadow/**</code> triggers <a href=".github/workflows/shadow-forward.yml"><code>shadow-forward.yml</code></a>, which checks for the <code>Shadow-export:</code> trailer (only export commits are forwarded, not ci-sync mirrors). It runs <a href="#fn-ci-forward"><code>shadow-ci-forward.ts</code></a>, which strips the <code>backend/</code> prefix and pushes the files to the external remote.</div>
+    <div><strong>Push to external shadow branch.</strong> The replayed commits are pushed to <code>shadow/main</code> (or <code>shadow/feature/x</code>) on the external remote. The external team can then <code>git merge shadow/main</code> to pull in changes &mdash; the same pattern as our import direction.</div>
   </div>
 </div>
 
@@ -504,32 +499,27 @@
   </tr>
   <tr>
     <td><a href="shadow-import.ts"><code>shadow-import.ts</code></a></td>
-    <td>Safely merges shadow branch into your local branch, only affecting <code>dir/</code> files (<a href="#fn-pull">details</a>)</td>
-    <td><span class="tag tag-green">Local</span></td>
-  </tr>
-  <tr>
-    <td><a href="shadow-export.ts"><code>shadow-export.ts</code></a></td>
-    <td>Exports your local changes to the shadow branch (with <code>.shadowignore</code> filtering). Auto-creates shadow branches on first use (<a href="#fn-export">details</a>)</td>
+    <td>Thin convenience wrapper: <code>git fetch && git merge origin/shadow/dir/branch</code> (<a href="#fn-pull">details</a>)</td>
     <td><span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
     <td><a href="shadow-ci-sync.ts"><code>shadow-ci-sync.ts</code></a></td>
-    <td>Replays external commits into shadow branches (the "pull" direction) (<a href="#fn-ci-sync">details</a>)</td>
-    <td><span class="tag tag-blue">GitHub Actions</span></td>
+    <td>Replays external commits into local shadow branches, adding <code>dir/</code> prefix (the "pull" direction) (<a href="#fn-ci-sync">details</a>)</td>
+    <td><span class="tag tag-blue">CI</span> / <span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
     <td><a href="shadow-ci-forward.ts"><code>shadow-ci-forward.ts</code></a></td>
-    <td>Forwards shadow branch content to external remotes (the "push" direction) (<a href="#fn-ci-forward">details</a>)</td>
-    <td><span class="tag tag-blue">GitHub Actions</span></td>
+    <td>Replays local commits to external shadow branches, stripping <code>dir/</code> prefix (the "push" direction) (<a href="#fn-ci-forward">details</a>)</td>
+    <td><span class="tag tag-blue">CI</span> / <span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
     <td><code>.shadowignore</code></td>
-    <td>Glob patterns for files to exclude when exporting (like <code>.gitignore</code> but for shadow sync) (<a href="#fn-parseShadowIgnore">parsed by <code>parseShadowIgnore</code></a>)</td>
-    <td>Read by <a href="shadow-export.ts"><code>shadow-export.ts</code></a></td>
+    <td>Glob patterns for files to exclude when forwarding (like <code>.gitignore</code> but for shadow sync) (<a href="#fn-parseShadowIgnore">parsed by <code>parseShadowIgnore</code></a>)</td>
+    <td>Read by <a href="shadow-ci-forward.ts"><code>shadow-ci-forward.ts</code></a></td>
   </tr>
   <tr>
     <td><a href="package.json"><code>package.json</code></a></td>
-    <td>npm scripts: <code>setup</code>, <code>export</code>, <code>ci-sync</code>, <code>ci-forward</code>, <code>test</code></td>
+    <td>npm scripts: <code>setup</code>, <code>import</code>, <code>ci-sync</code>, <code>ci-forward</code>, <code>test</code></td>
     <td>npm entry point</td>
   </tr>
   <tr>
@@ -902,55 +892,14 @@
 
 <hr>
 
-<h3 id="fn-pull"><a href="shadow-import.ts">shadow-import.ts</a> &mdash; Local Import Script</h3>
+<h3 id="fn-pull"><a href="shadow-import.ts">shadow-import.ts</a> &mdash; Local Import (Convenience Wrapper)</h3>
 
 <div class="card">
-  <p><strong>Purpose:</strong> Sync external changes and safely merge them into your local working branch. Runs ci-sync locally to fetch and replay external commits, then merges the shadow branch so only <code>dir/</code> files are affected. No token needed.</p>
+  <p><strong>Purpose:</strong> Thin convenience wrapper around <code>git fetch origin && git merge origin/shadow/{dir}/{branch}</code>. Shadow branches now carry the full repo tree (with <code>dir/</code> overlaid from external commits), so a plain <code>git merge</code> works correctly &mdash; git finds the seed commit as the merge base and only <code>dir/</code> files are affected.</p>
 
-  <h4>How it works:</h4>
-  <ol>
-    <li><strong>Local sync</strong> &mdash; stashes the working tree, runs <code>shadow-ci-sync.ts</code> locally to fetch from external remotes and replay new commits into shadow branches, then restores the original branch and pops the stash. Skipped with <code>--no-sync</code>.</li>
-    <li><strong>Fetch</strong> the latest shadow branch from origin</li>
-    <li><strong>Check if up to date</strong> &mdash; if shadow is already an ancestor of HEAD, nothing to do</li>
-    <li><strong>Merge with <code>--no-commit</code></strong> &mdash; merges the shadow branch but stops before committing, so we can fix the index</li>
-    <li><strong>Restore non-<code>dir/</code> files</strong> &mdash; <code>git read-tree HEAD</code> resets the entire index to HEAD (undoing the merge's effect on all files in one command), then <code>git checkout HEAD -- .</code> restores the working tree to match (the merge deletes non-<code>dir/</code> files from disk, so the index reset alone is not enough). Finally, <code>git checkout shadowRef -- dir/</code> brings in only the <code>dir/</code> changes from the shadow branch.</li>
-    <li><strong>Commit</strong> &mdash; the merge commit has correct ancestry and only <code>dir/</code> files were changed</li>
-  </ol>
-
-  <h4>Why not a plain <code>git merge</code>?</h4>
-  <p>The shadow branch's tree only contains <code>dir/</code> files (the export strips everything else). A plain <code>git merge origin/shadow/frontend/main</code> would tell git that all non-<code>dir/</code> files were "deleted" on the shadow side, causing git to delete your scripts, config, tests, and everything else outside <code>dir/</code>.</p>
-</div>
-
-<div class="card card-red">
-  <h4>Always use <code>npm run import</code>, never raw <code>git merge</code></h4>
-  <p>This is critical. A raw <code>git merge origin/shadow/{dir}/main</code> <strong>will delete your files</strong>. The pull script exists specifically to prevent this. If you accidentally run a raw merge, restore with <code>git checkout origin/main -- .</code> and recommit.</p>
-</div>
-
-<hr>
-
-<h3 id="fn-export"><a href="shadow-export.ts">shadow-export.ts</a> &mdash; Local Export Script</h3>
-
-<div class="card">
-  <p><strong>Purpose:</strong> Export your local changes from an internal repo subdirectory to the shadow branch using git plumbing commands, filtering out files you don't want in the external repo. Syncs external changes first to ensure the shadow branch is up to date. No worktree or merge is needed for the export itself &mdash; the tree and commit are built directly in memory.</p>
-
-  <h4>Step-by-step flow:</h4>
-  <ol>
-    <li><strong>Parse arguments</strong> &mdash; message (optional), remote, dir, branch, dry-run, no-sync</li>
-    <li><strong>Check for uncommitted changes in <code>dir/</code></strong> &mdash; refuses to run if the subdirectory has unsaved work. <strong>Acquire lock</strong> (<a href="#fn-acquireLock"><code>acquireLock</code></a>) to prevent concurrent exports.</li>
-    <li><strong>Parse .shadowignore</strong> (<a href="#fn-parseShadowIgnore"><code>parseShadowIgnore</code></a>) &mdash; load exclusion patterns</li>
-    <li><strong>Local sync</strong> &mdash; runs <code>shadow-ci-sync.ts</code> locally (stash, sync, restore) to ensure the shadow branch has the latest external commits. Skipped with <code>--no-sync</code>.</li>
-    <li><strong>Fetch from origin</strong> &mdash; if the shadow branch does not exist yet, it is <strong>auto-created</strong> as an orphan branch with an empty seed commit, pushed to origin, and merged into the working branch. Then verify it is merged into HEAD (i.e. <code>git merge-base --is-ancestor shadowRef HEAD</code>). If the shadow branch has unmerged commits (e.g. from external changes), export refuses and tells you to import first.</li>
-    <li><strong>Set <code>GIT_INDEX_FILE</code></strong> &mdash; point to a temp file so the real index is untouched</li>
-    <li><strong>Build the desired tree</strong> &mdash; <code>git read-tree --empty</code> clears the temp index, then <code>git read-tree --prefix=dir/ HEAD:dir</code> reads the subdirectory into the index. Also reads <code>.github/</code> and <code>shadow/</code> subtrees for CI dependencies.</li>
-    <li><strong>Remove shadowignored files</strong> from the index via <code>git rm --cached</code></li>
-    <li><strong><code>git write-tree</code></strong> &mdash; creates a tree object hash from the index</li>
-    <li><strong>Compare tree against shadow branch's tree</strong> &mdash; if <code>git rev-parse shadowRef^{tree}</code> matches, exit with "no changes"</li>
-    <li><strong>Show diff</strong> with <code>git diff-tree --stat</code> so the user sees what will be exported</li>
-    <li><strong>Auto-generate commit message</strong> if none provided &mdash; lists commit subjects since the last export (e.g. <code>Export backend/ (2 commits)\n- Add logger\n- Add config</code>)</li>
-    <li><strong><code>git commit-tree</code></strong> with two parents (shadow tip + HEAD) &mdash; creates a proper merge commit without an actual merge operation. Adds a <code>Shadow-export: true</code> trailer so the forward workflow knows to forward this commit (ci-sync commits don't have this trailer and are skipped).</li>
-    <li><strong>Push to origin</strong> &mdash; if rejected (non-fast-forward), the user must merge the shadow branch and retry</li>
-    <li><strong>Cleanup</strong> &mdash; delete the temp index file</li>
-  </ol>
+  <p>You can also just run the git commands directly &mdash; the script is optional:</p>
+  <pre style="background:var(--code-bg);padding:0.8rem;border-radius:0.3rem;margin:0.5rem 0">git fetch origin
+git merge origin/shadow/backend/main</pre>
 </div>
 
 <div class="card card-green">
@@ -1011,34 +960,32 @@
   <p><strong>New branches:</strong> If a new branch appears on the external remote, CI sync automatically discovers it (via <a href="#fn-listExternalBranches"><code>listExternalBranches</code></a>) and creates a new shadow branch for it.</p>
 </div>
 
-<div class="card card-red">
-  <h4>Designed for CI, but safe to run locally via <code>npm run import</code></h4>
-  <p>This script uses git plumbing (<code>read-tree</code>, <code>commit-tree</code>, <code>update-ref</code>) with a temporary index, so it does not touch the working tree or switch branches. It is safe to run locally via <code>shadow-import.ts</code>, which wraps it with stash/restore for additional safety. <strong>Do not run <code>shadow-ci-sync.ts</code> directly</strong> &mdash; use <code>npm run import</code> which wraps it safely.</p>
-</div>
-
 <hr>
 
-<h3 id="fn-ci-forward"><a href="shadow-ci-forward.ts">shadow-ci-forward.ts</a> &mdash; CI Push Script</h3>
+<h3 id="fn-ci-forward"><a href="shadow-ci-forward.ts">shadow-ci-forward.ts</a> &mdash; Forward (Push) Script</h3>
 
 <div class="card">
-  <p><strong>Purpose:</strong> Runs in GitHub Actions when a shadow branch is pushed. Takes the content from the shadow branch and pushes it to the external remote. Uses git plumbing (no worktree, no archive, no tar).</p>
-  <h4>What it does:</h4>
+  <p><strong>Purpose:</strong> The mirror of ci-sync. Replays local commits to a shadow branch on the external remote, stripping the <code>dir/</code> prefix. The external team can then <code>git merge shadow/main</code> to pull in changes. Uses git plumbing (no worktree).</p>
+  <h4>What it does (via <code>replayCommitsToExternal</code>):</h4>
   <ol>
-    <li>Parses the branch name from <code>GITHUB_REF_NAME</code> (e.g. <code>shadow/backend/main</code> &rarr; dir=<code>backend</code>, branch=<code>main</code>). Finds the matching remote config entry.</li>
-    <li>Sets <code>GIT_INDEX_FILE</code> to a temp file</li>
-    <li><code>git read-tree origin/refName:dir</code> &mdash; reads the <code>dir/</code> subtree at root level (strips the prefix, so <code>backend/src/app.ts</code> becomes <code>src/app.ts</code> in the index)</li>
-    <li><code>git write-tree</code> &mdash; creates a tree hash from the index</li>
-    <li>Compares tree against the external branch's tree &mdash; exits if no changes</li>
-    <li>Builds the commit message: strips <code>Shadow-*</code> trailers from the shadow branch's message and adds a <code>Shadow-forwarded-from: {hash}</code> trailer so CI sync recognizes it as a round-trip commit and skips it on pull-back</li>
-    <li><code>git commit-tree</code> with the external branch tip as parent (or no parent for an orphan branch)</li>
-    <li>Pushes to the external remote (requires <code>EXTERNAL_REPO_TOKEN</code> PAT)</li>
-    <li>Cleanup: deletes the temp index file</li>
+    <li><strong>Scan for already-forwarded commits</strong> &mdash; reads <code>Shadow-forwarded-from</code> trailers from the external's shadow branch to build a local&rarr;external SHA mapping</li>
+    <li><strong>Collect local commits</strong> that touch <code>dir/</code> since the seed, in topological order</li>
+    <li><strong>Filter</strong> &mdash; skip already-forwarded commits and commits with <code>Shadow-synced-from</code> trailer (came from external, no echo-back)</li>
+    <li><strong>For each new commit:</strong>
+      <ul>
+        <li>Read <code>commit:{dir}</code> subtree at root (strips prefix: <code>backend/src/app.ts</code> &rarr; <code>src/app.ts</code>)</li>
+        <li>Apply <code>.shadowignore</code> filtering</li>
+        <li>Map local parents to external SHAs; graft root commits onto the external seed hash</li>
+        <li><code>git commit-tree</code> with original author/date metadata + <code>Shadow-forwarded-from: {localSHA}</code> trailer</li>
+      </ul>
+    </li>
+    <li><strong>Push</strong> the replayed commits to <code>shadow/main</code> on the external remote</li>
   </ol>
   <p><strong>Key details:</strong></p>
   <ul>
-    <li>No filtering happens here &mdash; <code>.shadowignore</code> was already applied during export</li>
-    <li>The <code>Shadow-forwarded-from</code> trailer prevents round-trip duplicates: when CI sync pulls from external, it skips commits that originated from us</li>
-    <li>The export preserves CI dependencies on the shadow branch (<code>.github/workflows/</code>, <code>package.json</code>, <code>shadow/shadow-ci-forward.ts</code>, <code>shadow/shadow-common.ts</code>, <code>shadow/shadow-config.json</code>) so the forward workflow can run</li>
+    <li>Symmetric with ci-sync: ci-sync adds a prefix, ci-forward strips it. Both replay commit-by-commit with preserved metadata.</li>
+    <li>The <code>Shadow-forwarded-from</code> trailer prevents round-trip duplicates: ci-sync skips commits with this trailer on pull-back</li>
+    <li>External shadow branch shares ancestry with external main via the seed hash, enabling plain <code>git merge</code> on the external side</li>
   </ul>
 </div>
 
@@ -1048,6 +995,12 @@
 <div class="card card-accent">
   <h4>Why per-commit replay instead of a single squashed diff?</h4>
   <p>Replaying commits one-by-one preserves the full history: who made each change, when, and why. A squashed diff would lose all intermediate commits and show everything as one big change by "sync bot." Per-commit replay means <code>git blame</code> and <code>git log</code> remain useful.</p>
+</div>
+
+<div class="card card-accent">
+  <h4>Why full-tree shadow commits and plain <code>git merge</code>?</h4>
+  <p>Shadow branches now carry the <strong>full repo tree</strong> (not just <code>dir/</code> files). Each replayed commit starts from the parent's tree and overlays the external's content under <code>dir/</code>. This means the shadow branch shares ancestry with main via the seed commit, and <code>git merge origin/shadow/backend/main</code> just works &mdash; git sees that only <code>backend/</code> files changed on the shadow side, and leaves everything else untouched. No special import script needed.</p>
+  <p>The same principle works in reverse: ci-forward pushes stripped commits to <code>shadow/main</code> on the external, grafted onto the external's seed hash. The external team merges with <code>git merge shadow/main</code>. Both directions are symmetric.</p>
 </div>
 
 <div class="card card-accent">
