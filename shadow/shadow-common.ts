@@ -689,17 +689,21 @@ export function replayCommitsTopological(opts: {
         localParents.push(graftBase);
       }
 
-      // Build full-repo tree: start from parent's tree, overlay dir/ from external.
-      // This ensures shadow commits carry the full repo tree (not just dir/),
-      // so merging the shadow branch into main doesn't delete other files.
-      const baseTree = localParents.length > 0
-        ? `${localParents[0]}^{tree}`
-        : graftBase ? `${graftBase}^{tree}` : null;
+      // Build full-repo tree: always use the seed commit tree as the base, then
+      // overlay dir/ from external. This ensures shadow commits carry the full
+      // repo tree so merging the shadow branch into main doesn't delete files.
+      // Using seed (not parent) as base guarantees correctness even when older
+      // synced commits had incomplete trees (pre-seed history).
+      const baseTree = graftBase
+        ? `${graftBase}^{tree}`
+        : localParents.length > 0
+          ? `${localParents[0]}^{tree}`
+          : null;
 
       if (baseTree) {
         git(["read-tree", baseTree], { env: { GIT_INDEX_FILE: tmpIndex } });
         // Remove old dir/ content, then overlay new external content
-        git(["rm", "-r", "--cached", "--quiet", `${dir}/`], { env: { GIT_INDEX_FILE: tmpIndex }, safe: true });
+        git(["rm", "-r", "--cached", "--quiet", "-f", `${dir}/`], { env: { GIT_INDEX_FILE: tmpIndex }, safe: true });
         git(["read-tree", `--prefix=${dir}/`, `${commit.hash}^{tree}`], { env: { GIT_INDEX_FILE: tmpIndex } });
       } else {
         // No base tree available — fall back to dir/-only tree (orphan)
