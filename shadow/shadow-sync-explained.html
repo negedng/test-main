@@ -287,16 +287,38 @@
   </ul>
 </div>
 
-<div class="diagram">RepoA (monorepo)                           RepoB (standalone)
-+---------------------------+              +---------------------------+
-|  docs/                    |              |  src/                     |
-|  frontend/                |              |  package.json             |
-|  backend/                 |  &lt;------&gt;  |  tsconfig.json            |
-|    src/                   |   Shadow     |  tests/                   |
-|    package.json           |    Sync      |  ...                      |
-|    tsconfig.json          |              |                           |
-|  ...                      |              |                           |
-+---------------------------+              +---------------------------+</div>
+<div class="card" style="overflow-x:auto">
+  <table style="margin:0 auto;border-collapse:separate;border-spacing:0.8rem;text-align:left">
+    <tr>
+      <td style="background:var(--accent-light);padding:1rem 1.5rem;border-radius:8px;vertical-align:top">
+        <strong>RepoA</strong> (monorepo)<br><br>
+        <code>docs/</code><br>
+        <code>frontend/</code><br>
+        <code style="color:var(--accent);font-weight:bold">backend/</code><br>
+        <code>&nbsp;&nbsp;src/</code><br>
+        <code>&nbsp;&nbsp;package.json</code><br>
+        <code>&nbsp;&nbsp;tsconfig.json</code>
+      </td>
+      <td style="text-align:center;vertical-align:middle;padding:0 1rem;font-size:1.5rem">
+        &xlarr;&xrarr;<br>
+        <small style="font-size:0.7rem;color:var(--muted)">Shadow Sync</small>
+      </td>
+      <td style="background:#dcfce7;padding:1rem 1.5rem;border-radius:8px;vertical-align:top">
+        <strong>RepoB</strong> (standalone)<br><br>
+        <code style="color:var(--green);font-weight:bold">src/</code><br>
+        <code style="color:var(--green);font-weight:bold">package.json</code><br>
+        <code style="color:var(--green);font-weight:bold">tsconfig.json</code><br>
+        <code>tests/</code><br>
+        <code>README.md</code>
+      </td>
+    </tr>
+    <tr>
+      <td style="text-align:center;color:var(--muted);font-size:0.85rem" colspan="3">
+        <code>backend/src/app.ts</code> in RepoA &harr; <code>src/app.ts</code> in RepoB
+      </td>
+    </tr>
+  </table>
+</div>
 
 <!-- ================================================================ -->
 <!-- 2. ARCHITECTURE                                                  -->
@@ -355,17 +377,19 @@ shadow-sync --from a</code></pre>
   </div>
 </div>
 
-<div class="diagram">                    shadow-sync --from b
-                    (replay RepoB &rarr; RepoA)
-
-  RepoB (source)                                    RepoA (target)
-  +-----------+     fetch      +-------------+     shadow branches
-  | main      | -----------&gt;  | replay loop | ---&gt; shadow/backend/main
-  | feature/x | -----------&gt;  | per-commit  | ---&gt; shadow/backend/feature/x
-  +-----------+               +-------------+
-                                    |
-                    strip ""  &rarr;  add "backend/"
-                    add trailer: Shadow-synced-from</div>
+<div class="card" style="overflow-x:auto">
+  <h3 style="text-align:center;margin-bottom:1rem"><code>shadow-sync --from b</code> &mdash; replay RepoB &rarr; RepoA</h3>
+  <table style="margin:0 auto;border-collapse:separate;border-spacing:0.5rem;text-align:center">
+    <tr>
+      <td style="background:var(--accent-light);padding:0.8rem 1.2rem;border-radius:8px"><strong>RepoB</strong><br><code>main</code>, <code>feature/x</code></td>
+      <td style="padding:0 1rem">&xrarr;<br><small>fetch</small></td>
+      <td style="background:#ede9fe;padding:0.8rem 1.2rem;border-radius:8px"><strong>Replay engine</strong><br>per-commit, topo order<br><small>strip <code>b.dir</code> &rarr; add <code>a.dir</code></small><br><small>+ <code>Shadow-synced-from</code> trailer</small></td>
+      <td style="padding:0 1rem">&xrarr;<br><small>push</small></td>
+      <td style="background:#dcfce7;padding:0.8rem 1.2rem;border-radius:8px"><strong>RepoA</strong><br><code>shadow/backend/main</code><br><code>shadow/backend/feature/x</code></td>
+    </tr>
+  </table>
+  <p style="text-align:center;margin-top:1rem;color:var(--muted)">Then on RepoA: <code>git merge origin/shadow/backend/main</code></p>
+</div>
 
 <!-- ================================================================ -->
 <!-- 3. CONFIGURATION                                                 -->
