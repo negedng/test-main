@@ -1,7 +1,10 @@
 {
-  "remotes": [
-    { "remote": "backend",  "dir": "backend",  "url": "https://github.com/negedng/test-backend.git"  },
-    { "remote": "frontend", "dir": "frontend", "url": "https://github.com/negedng/test-frontend.git" }
+  "pairs": [
+    {
+      "name": "backend",
+      "a": { "remote": "repo-a", "url": "https://github.com/negedng/repo-a.git", "dir": "backend" },
+      "b": { "remote": "repo-b", "url": "https://github.com/negedng/repo-b.git", "dir": "" }
+    }
   ],
 
   "trailers": {
@@ -19,6 +22,5 @@
   },
 
   "maxBuffer": 52428800,
-  "maxDirDepth": 100,
   "shadowBranchPrefix": "shadow"
 }

@@ -5,21 +5,30 @@ import * as os from "os";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-interface RemoteConfig {
-  /** Git remote name — must match `git remote add <name> <url>` */
+export interface RepoEndpoint {
+  /** Git remote name */
   remote: string;
-  /** Local subdirectory in your repo that maps to the root of that remote */
+  /** URL for the repo. If absent, the remote must already exist. */
+  url?: string;
+  /** Path prefix in this repo ("backend", "" for root) */
   dir: string;
-  /** URL for the external repo */
-  url: string;
+  /** Path to a .shadowignore file — filters what this endpoint sends to the other side. */
+  ignore?: string;
+}
+
+export interface SyncPair {
+  /** Stable identifier — used in seed trailers and shadow branch names. */
+  name: string;
+  /** The two repo endpoints. Symmetric — direction is chosen at runtime via --from. */
+  a: RepoEndpoint;
+  b: RepoEndpoint;
 }
 
 interface ShadowSyncConfig {
-  remotes: RemoteConfig[];
+  pairs: SyncPair[];
   trailers: { sync: string; seed: string; forward: string; exp: string };
   gitConfigOverrides: Record<string, string>;
   maxBuffer: number;
-  maxDirDepth: number;
   shadowBranchPrefix: string;
 }
 
@@ -28,42 +37,47 @@ const CONFIG_PATH = path.join(__dirname, "shadow-config.json");
 function loadConfig(): ShadowSyncConfig {
   const raw = fs.readFileSync(CONFIG_PATH, "utf8");
   const doc = JSON.parse(raw) as Record<string, unknown>;
-  return {
-    remotes:           (doc.remotes as RemoteConfig[]) ?? [],
-    trailers: {
-      sync: ((doc.trailers as Record<string, string>)?.sync) ?? "Shadow-synced-from",
-      seed: ((doc.trailers as Record<string, string>)?.seed) ?? "Shadow-seed",
-      forward: ((doc.trailers as Record<string, string>)?.forward) ?? "Shadow-forwarded-from",
-      exp: ((doc.trailers as Record<string, string>)?.export) ?? "Shadow-export",
-    },
-    gitConfigOverrides: (doc.gitConfigOverrides as Record<string, string>) ?? {},
-    maxBuffer:          (doc.maxBuffer as number) ?? 50 * 1024 * 1024,
-    maxDirDepth:        (doc.maxDirDepth as number) ?? 100,
-    shadowBranchPrefix: (doc.shadowBranchPrefix as string) ?? "shadow",
+
+  const trailers = {
+    sync: ((doc.trailers as Record<string, string>)?.sync) ?? "Shadow-synced-from",
+    seed: ((doc.trailers as Record<string, string>)?.seed) ?? "Shadow-seed",
+    forward: ((doc.trailers as Record<string, string>)?.forward) ?? "Shadow-forwarded-from",
+    exp: ((doc.trailers as Record<string, string>)?.export) ?? "Shadow-export",
   };
+  const gitConfigOverrides = (doc.gitConfigOverrides as Record<string, string>) ?? {};
+  const maxBuffer = (doc.maxBuffer as number) ?? 50 * 1024 * 1024;
+  const shadowBranchPrefix = (doc.shadowBranchPrefix as string) ?? "shadow";
+
+  let pairs: SyncPair[];
+  if (doc.pairs) {
+    pairs = (doc.pairs as SyncPair[]);
+  } else {
+    pairs = [];
+  }
+
+  return { pairs, trailers, gitConfigOverrides, maxBuffer, shadowBranchPrefix };
 }
 
 const config = loadConfig();
 
-export const REMOTES: RemoteConfig[] = [...config.remotes];
+export const PAIRS: SyncPair[] = [...config.pairs];
 const SYNC_TRAILER    = config.trailers.sync;
 export const SEED_TRAILER    = config.trailers.seed;
 const FORWARD_TRAILER = config.trailers.forward;
 const EXPORT_TRAILER  = config.trailers.exp;
 export const SHADOW_BRANCH_PREFIX = config.shadowBranchPrefix;
 
-// Allow tests to inject config via environment variable (JSON array of RemoteConfig).
-if (process.env.SHADOW_TEST_REMOTES) {
-  REMOTES.length = 0;
-  REMOTES.push(...JSON.parse(process.env.SHADOW_TEST_REMOTES));
+// Allow tests to inject config via environment variable.
+if (process.env.SHADOW_TEST_PAIRS) {
+  PAIRS.length = 0;
+  PAIRS.push(...JSON.parse(process.env.SHADOW_TEST_PAIRS));
 }
 
 // ── Core utilities ───────────────────────────────────────────────────────────
 
 const MAX_BUFFER = config.maxBuffer;
 
-/** Repo root — ensures git commands use paths relative to the repo, not the cwd.
- *  When invoked via `npm --prefix shadow`, cwd is shadow/ which breaks path-based commands. */
+/** Workspace root — ensures git commands use paths relative to the repo, not the cwd. */
 const REPO_ROOT = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" })
   .stdout.trim();
 
@@ -77,7 +91,7 @@ export function die(msg: string): never {
   process.exit(1);
 }
 
-/** Validate that a dir/remote name is safe for use in git commands and path construction. */
+/** Validate that a name is safe for use in git commands and path construction. */
 export function validateName(value: string, label: string): void {
   if (!value) die(`${label} must not be empty.`);
   if (value.includes("..")) die(`${label} must not contain '..'.`);
@@ -88,12 +102,7 @@ export function validateName(value: string, label: string): void {
 type GitResult = { stdout: string; stderr: string; status: number; ok: boolean };
 type GitOpts = { cwd?: string; plain?: boolean; raw?: boolean; env?: Record<string, string>; input?: string };
 
-/** Run a git command. Throws on non-zero exit.
- *  Use { plain: true } to skip config overrides (for working-tree ops on Windows).
- *  Use { raw: true } to skip trimming stdout (for patches where whitespace matters). */
 export function git(args: string[], opts?: GitOpts & { safe?: false }): string;
-/** Run a git command. Returns { stdout, stderr, status, ok } — never throws.
- *  Use { plain: true } to skip config overrides (for working-tree ops on Windows). */
 export function git(args: string[], opts: GitOpts & { safe: true }): GitResult;
 export function git(args: string[], opts?: GitOpts & { safe?: boolean }): string | GitResult {
   const fullArgs = opts?.plain ? args : [...GIT_CONFIG_OVERRIDES, ...args];
@@ -132,7 +141,7 @@ export function getCurrentBranch(): string {
   return result.stdout;
 }
 
-export function listExternalBranches(remote: string): string[] {
+export function listBranches(remote: string): string[] {
   return git(["branch", "-r"])
     .split("\n")
     .map(l => l.trim())
@@ -140,9 +149,9 @@ export function listExternalBranches(remote: string): string[] {
     .map(l => l.replace(`${remote}/`, ""));
 }
 
-/** Build the canonical shadow branch name: shadow/{dir}/{branch} */
-export function shadowBranchName(dir: string, branch: string): string {
-  return `${SHADOW_BRANCH_PREFIX}/${dir}/${branch}`;
+/** Build the canonical shadow branch name: shadow/{pairName}/{branch} */
+export function shadowBranchName(pairName: string, branch: string): string {
+  return `${SHADOW_BRANCH_PREFIX}/${pairName}/${branch}`;
 }
 
 /** Append a trailer to a commit message using `git interpret-trailers`. */
@@ -156,17 +165,20 @@ export function appendTrailer(message: string, trailer: string): string {
   return result.stdout;
 }
 
+/** Ensure a git remote is configured. If the endpoint has a url, add or update it. */
+export function ensureRemote(endpoint: RepoEndpoint): void {
+  if (!endpoint.url) return;
+  const existing = git(["remote", "get-url", endpoint.remote], { safe: true });
+  if (!existing.ok) {
+    git(["remote", "add", endpoint.remote, endpoint.url]);
+  } else if (existing.stdout !== endpoint.url) {
+    git(["remote", "set-url", endpoint.remote, endpoint.url]);
+  }
+}
+
 // ── Pre-flight checks ─────────────────────────────────────────────────────────
 
-/**
- * Run pre-flight checks on an external ref before syncing.
- * Inspects the remote's tree for potential issues: shallow clones (need full
- * history for commit replay), submodules (can't be synced), symlinks (targets
- * won't be adjusted for the subdirectory), case-conflicting paths (data loss
- * on Windows/macOS), and Git LFS usage (only pointer files are transferred).
- * Returns an array of warnings/errors. Callers should abort on "error" level.
- */
-export function preflightChecks(externalRef: string): { level: "error" | "warn"; code: string; message: string }[] {
+export function preflightChecks(ref: string): { level: "error" | "warn"; code: string; message: string }[] {
   type W = { level: "error" | "warn"; code: string; message: string };
   const warnings: W[] = [];
   const warn  = (code: string, message: string) => warnings.push({ level: "warn", code, message });
@@ -177,7 +189,7 @@ export function preflightChecks(externalRef: string): { level: "error" | "warn";
     error("SHALLOW_CLONE", "This repository is a shallow clone. Shadow sync requires full history.\n  Run: git fetch --unshallow");
   }
 
-  const tree = git(["ls-tree", "-r", "--long", externalRef], { safe: true });
+  const tree = git(["ls-tree", "-r", "--long", ref], { safe: true });
   if (tree.ok && tree.stdout) {
     const paths: string[] = [];
     for (const entry of tree.stdout.split("\n").filter(Boolean)) {
@@ -185,8 +197,8 @@ export function preflightChecks(externalRef: string): { level: "error" | "warn";
       if (!m) continue;
       const [, mode, , filePath] = m;
       paths.push(filePath);
-      if (mode === "160000") warn("SUBMODULE", `Remote contains a submodule at '${filePath}'. Submodules cannot be synced and will be skipped.`);
-      if (mode === "120000") warn("SYMLINK", `Remote contains a symlink at '${filePath}'. Symlink targets are not adjusted for the local subdirectory.`);
+      if (mode === "160000") warn("SUBMODULE", `Contains a submodule at '${filePath}'. Submodules cannot be synced and will be skipped.`);
+      if (mode === "120000") warn("SYMLINK", `Contains a symlink at '${filePath}'. Symlink targets are not adjusted for the subdirectory.`);
     }
 
     if (process.platform === "win32" || process.platform === "darwin") {
@@ -201,18 +213,14 @@ export function preflightChecks(externalRef: string): { level: "error" | "warn";
     }
   }
 
-  const attrs = git(["show", `${externalRef}:.gitattributes`], { safe: true });
+  const attrs = git(["show", `${ref}:.gitattributes`], { safe: true });
   if (attrs.ok && attrs.stdout.includes("filter=lfs")) {
-    warn("GIT_LFS", "Remote uses Git LFS. Shadow sync will transfer LFS pointer files, not actual content.\n  Ensure LFS is configured in the internal repo, or large files will be pointers.");
+    warn("GIT_LFS", "Uses Git LFS. Shadow sync will transfer LFS pointer files, not actual content.");
   }
 
   return warnings;
 }
 
-/**
- * Print preflight warnings and abort on errors.
- * Returns true if safe to continue, false if there were errors.
- */
 export function handlePreflightResults(warnings: { level: "error" | "warn"; code: string; message: string }[]): boolean {
   for (const w of warnings) {
     console.error(`${w.level === "error" ? "✘" : "⚠"} [${w.code}] ${w.message}`);
@@ -260,7 +268,6 @@ function getCommitMeta(hash: string): CommitMeta {
   };
 }
 
-/** Build the GIT_AUTHOR/COMMITTER env vars from commit metadata. */
 function commitEnv(meta: CommitMeta): Record<string, string> {
   return {
     GIT_AUTHOR_NAME:      meta.authorName,
@@ -272,7 +279,6 @@ function commitEnv(meta: CommitMeta): Record<string, string> {
   };
 }
 
-/** Strip all Shadow-* trailers from a commit message. */
 function stripTrailers(message: string): string {
   const trailerPrefixes = [SYNC_TRAILER, SEED_TRAILER, FORWARD_TRAILER, EXPORT_TRAILER];
   return message.split("\n")
@@ -281,47 +287,45 @@ function stripTrailers(message: string): string {
 }
 
 const SYNCED_HASH_RE = new RegExp(`^${SYNC_TRAILER}:\\s*([0-9a-f]{7,40})`);
-
+const FORWARD_HASH_RE = new RegExp(`^${FORWARD_TRAILER}:\\s*([0-9a-f]{7,40})`);
 const SEED_HASH_RE = new RegExp(`^${SEED_TRAILER}:\\s*(\\S+)\\s+([0-9a-f]{7,40})`);
 
-function findSeedHash(dir: string): string | null {
+function findSeedHash(pairName: string): string | null {
   const log = git(["log", "--all", `--grep=^${SEED_TRAILER}:`, "--format=%B"], { safe: true });
   if (!log.ok || !log.stdout) return null;
   for (const line of log.stdout.split("\n")) {
     const match = line.match(SEED_HASH_RE);
-    if (match && match[1] === dir) return match[2];
+    if (match && match[1] === pairName) return match[2];
   }
   return null;
 }
 
-/** Returns the local commit SHA of the seed commit for a directory. */
-function findSeedCommit(dir: string): string | null {
+function findSeedCommit(pairName: string): string | null {
   const MARKER = "SEEDCOMMIT ";
   const log = git(
     ["log", "--all", `--grep=^${SEED_TRAILER}:`, `--format=${MARKER}%H%n%B`],
     { safe: true },
   );
   if (!log.ok || !log.stdout) return null;
-  let currentLocal: string | null = null;
+  let currentCommit: string | null = null;
   for (const line of log.stdout.split("\n")) {
     if (line.startsWith(MARKER)) {
-      currentLocal = line.slice(MARKER.length).trim();
+      currentCommit = line.slice(MARKER.length).trim();
       continue;
     }
     const match = line.match(SEED_HASH_RE);
-    if (match && match[1] === dir && currentLocal) return currentLocal;
+    if (match && match[1] === pairName && currentCommit) return currentCommit;
   }
   return null;
 }
 
-// ── Shared replay helpers ────────────────────────────────────────────────────
+// ── Shared helpers ──────────────────────────────────────────────────────────
 
 interface TopoCommit {
   hash: string;
   parents: string[];
 }
 
-/** Parse `git rev-list --parents` output into TopoCommit[]. */
 function parseRevList(output: string): TopoCommit[] {
   return output.split("\n").filter(Boolean).map(line => {
     const parts = line.split(/\s+/);
@@ -329,12 +333,6 @@ function parseRevList(output: string): TopoCommit[] {
   });
 }
 
-/**
- * Scan git log for trailer-based SHA mappings.
- * Returns a Map keyed by the first capture group of trailerRe, valued by the
- * commit hash that contained the trailer. Used by both import and export to
- * track which commits have already been replayed.
- */
 function buildTrailerMapping(logArgs: string[], trailerRe: RegExp): Map<string, string> {
   const mapping = new Map<string, string>();
   const MARKER = "TMAP ";
@@ -355,10 +353,6 @@ function buildTrailerMapping(logArgs: string[], trailerRe: RegExp): Map<string, 
   return mapping;
 }
 
-/**
- * Map source commit parents → target parents via shaMapping, falling back to
- * graftBase when no parents resolve (root commits or first commit after seed).
- */
 function resolveParents(
   commit: TopoCommit,
   shaMapping: Map<string, string>,
@@ -375,23 +369,62 @@ function resolveParents(
   return parents;
 }
 
-// ── Topology-preserving replay engine ────────────────────────────────────────
+function buildRemappedTree(opts: {
+  commitHash: string;
+  sourceDir: string;
+  targetDir: string;
+  baseTree: string | null;
+  tmpIndex: string;
+  shadowIgnoreFile?: string;
+}): string | null {
+  const { commitHash, sourceDir, targetDir, baseTree, tmpIndex } = opts;
+  const idxEnv = { GIT_INDEX_FILE: tmpIndex };
 
-/**
- * Collect all commits across multiple branches in topological order (parents first).
- * Uses `git rev-list --topo-order --reverse --parents` for a single traversal
- * that automatically deduplicates shared commits.
- */
-function collectAllExternalCommits(
-  remote: string,
-  branches: string[],
+  if (baseTree) {
+    git(["read-tree", baseTree], { env: idxEnv });
+    if (targetDir) {
+      git(["rm", "-r", "--cached", "--quiet", "-f", `${targetDir}/`], { env: idxEnv, safe: true });
+    }
+  } else {
+    git(["read-tree", "--empty"], { env: idxEnv });
+  }
+
+  let sourceTreeRef: string;
+  if (sourceDir) {
+    const subtree = git(["rev-parse", `${commitHash}:${sourceDir}`], { safe: true });
+    if (!subtree.ok) return null;
+    sourceTreeRef = subtree.stdout;
+  } else {
+    sourceTreeRef = `${commitHash}^{tree}`;
+  }
+
+  if (targetDir) {
+    git(["read-tree", `--prefix=${targetDir}/`, sourceTreeRef], { env: idxEnv });
+  } else {
+    git(["read-tree", sourceTreeRef], { env: idxEnv });
+  }
+
+  if (opts.shadowIgnoreFile && fs.existsSync(opts.shadowIgnoreFile)) {
+    const ignored = git(
+      ["ls-files", "--cached", "-i", "--exclude-from", opts.shadowIgnoreFile],
+      { env: idxEnv },
+    ).split("\n").filter(Boolean);
+    for (let i = 0; i < ignored.length; i += 100) {
+      git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)],
+        { env: idxEnv, safe: true });
+    }
+  }
+
+  return git(["write-tree"], { env: idxEnv });
+}
+
+/** Collect commits from remote-tracking branches in topo order. */
+function collectBranchCommits(
+  refs: string[],
   seedHash?: string,
 ): TopoCommit[] {
-  const refs = branches.map(b => `${remote}/${b}`);
   const args = ["rev-list", "--topo-order", "--reverse", "--parents"];
-  if (seedHash) {
-    args.push(`^${seedHash}`);
-  }
+  if (seedHash) args.push(`^${seedHash}`);
   args.push(...refs);
 
   const result = git(args, { safe: true });
@@ -399,9 +432,30 @@ function collectAllExternalCommits(
   return parseRevList(result.stdout);
 }
 
-/**
- * Map each branch name to the local SHA corresponding to its external HEAD.
- */
+/** Collect commits from branches, optionally filtered to those touching dir/. */
+function collectCommitsForDir(
+  refs: string[],
+  dir: string,
+  seedBoundary?: string,
+): TopoCommit[] {
+  const args = ["rev-list", "--topo-order", "--reverse", "--parents"];
+  if (seedBoundary) {
+    // For remote refs use ^exclude, for branch ranges use seedBoundary..ref
+    if (refs.length === 1 && !refs[0].includes("/")) {
+      args.push(`${seedBoundary}..${refs[0]}`);
+    } else {
+      args.push(`^${seedBoundary}`, ...refs);
+    }
+  } else {
+    args.push(...refs);
+  }
+  if (dir) args.push("--", `${dir}/`);
+
+  const result = git(args, { safe: true });
+  if (!result.ok || !result.stdout) return [];
+  return parseRevList(result.stdout);
+}
+
 function buildBranchMapping(
   remote: string,
   branches: string[],
@@ -410,274 +464,232 @@ function buildBranchMapping(
   const branchMapping = new Map<string, string>();
   for (const branch of branches) {
     const headSHA = git(["rev-parse", `${remote}/${branch}`]);
-    const localSHA = shaMapping.get(headSHA);
-    if (localSHA) branchMapping.set(branch, localSHA);
+    const replayedSHA = shaMapping.get(headSHA);
+    if (replayedSHA) branchMapping.set(branch, replayedSHA);
   }
   return branchMapping;
 }
 
+// ── Unified replay ──────────────────────────────────────────────────────────
+
 /**
- * Replay commits from multiple external branches into a local subdirectory,
- * preserving the original DAG topology (shared ancestors stay shared).
- *
- * Instead of checking out branches and cherry-picking, this uses git plumbing:
- *   - `git read-tree --prefix` to scope external trees under {dir}/
- *   - `git commit-tree` to create commits with explicit parents
- *   - `git update-ref` (by caller) to point shadow branches at the right tips
- *
- * Returns a branchMapping so the caller can update each shadow branch ref.
+ * Direction config for replay: which trailers to use and which to skip.
+ * "a→b" uses FORWARD trailer, skips SYNC (came from b).
+ * "b→a" uses SYNC trailer, skips FORWARD (came from a).
  */
-export function replayCommitsIncoming(opts: {
-  remote: string;
-  dir: string;
+interface DirectionConfig {
+  addTrailer: string;
+  addTrailerRe: RegExp;
+  skipTrailer: string;
+  scanTrailer: string;
+  scanTrailerRe: RegExp;
+}
+
+const DIR_A_TO_B: DirectionConfig = {
+  addTrailer: FORWARD_TRAILER,
+  addTrailerRe: FORWARD_HASH_RE,
+  skipTrailer: SYNC_TRAILER,
+  scanTrailer: FORWARD_TRAILER,
+  scanTrailerRe: FORWARD_HASH_RE,
+};
+
+const DIR_B_TO_A: DirectionConfig = {
+  addTrailer: SYNC_TRAILER,
+  addTrailerRe: SYNCED_HASH_RE,
+  skipTrailer: FORWARD_TRAILER,
+  scanTrailer: SYNC_TRAILER,
+  scanTrailerRe: SYNCED_HASH_RE,
+};
+
+/**
+ * Replay commits from one side of a pair to the other.
+ *
+ * @param from - "a" or "b": which side's commits to replay
+ * @param branches - branches to replay (remote-tracking refs for the source)
+ * @param sourceBranch - when replaying from a workspace branch (not remote refs),
+ *                       the branch name to collect commits from
+ */
+export function replayCommits(opts: {
+  pair: SyncPair;
+  from: "a" | "b";
   branches: string[];
+  sourceBranch?: string;
 }): { mirrored: number; branchMapping: Map<string, string>; upToDate: boolean } {
-  const { remote, dir, branches } = opts;
+  const { pair, from, branches } = opts;
+  const source = from === "a" ? pair.a : pair.b;
+  const target = from === "a" ? pair.b : pair.a;
+  const dir    = from === "a" ? DIR_A_TO_B : DIR_B_TO_A;
 
-  console.log("Scanning local history for already-mirrored commits...");
-  const shaMapping = buildTrailerMapping(
-    ["log", "--all", `--grep=^${SYNC_TRAILER}:`, "--", `${dir}/`],
-    SYNCED_HASH_RE,
-  );
-  console.log(`Found ${shaMapping.size} previously mirrored commit(s).`);
+  // 1. Scan target history for already-replayed commits
+  console.log("Scanning history for already-replayed commits...");
 
-  const seedHash = findSeedHash(dir);
+  // For remote-based scanning (target has shadow branches on its remote)
+  const shadowRefs = branches
+    .map(b => `${target.remote}/${shadowBranchName(pair.name, b)}`)
+    .filter(r => refExists(r));
+
+  let shaMapping: Map<string, string>;
+  if (shadowRefs.length > 0) {
+    shaMapping = buildTrailerMapping(
+      ["log", ...shadowRefs, `--grep=^${dir.scanTrailer}:`],
+      dir.scanTrailerRe,
+    );
+  } else {
+    // Fallback: scan all history (for shadow branches on our side)
+    const logArgs = ["log", "--all", `--grep=^${dir.scanTrailer}:`];
+    if (target.dir) logArgs.push("--", `${target.dir}/`);
+    shaMapping = buildTrailerMapping(logArgs, dir.scanTrailerRe);
+  }
+  console.log(`Found ${shaMapping.size} previously replayed commit(s).`);
+
+  // 2. Find seed
+  const seedHash = findSeedHash(pair.name);
   if (seedHash) {
     console.log(`Found seed baseline: ${seedHash.slice(0, 10)} (skipping earlier history).`);
   }
 
-  const allCommits = collectAllExternalCommits(remote, branches, seedHash ?? undefined);
-  const newCommits = allCommits.filter(c => !shaMapping.has(c.hash));
+  // 3. Collect commits from source.
+  // If sourceBranch is set AND source has a url (it's a remote), use remote-tracking refs.
+  // If sourceBranch is set and source has no url (it's the workspace), use bare branch name.
+  const sourceRefs = opts.sourceBranch
+    ? [source.url ? `${source.remote}/${opts.sourceBranch}` : opts.sourceBranch]
+    : branches.map(b => `${source.remote}/${b}`);
+
+  // Seed boundary: limits how far back we scan.
+  // For remote refs (--from b with remote source), use seedHash (the source's tip at seed time).
+  // For workspace branches (--from a with sourceBranch), use the seed commit if it's
+  // in the source's history; otherwise scan everything (dedup handles the rest).
+  let seedBoundary: string | undefined;
+  if (opts.sourceBranch) {
+    const sc = findSeedCommit(pair.name);
+    const ref = sourceRefs[0];
+    if (sc && git(["merge-base", "--is-ancestor", sc, ref], { safe: true }).ok) {
+      seedBoundary = sc;
+    }
+    // No boundary = scan all commits on source branch (dedup handles the rest)
+  } else {
+    seedBoundary = seedHash ?? undefined;
+  }
+
+  const allCommits = source.dir
+    ? collectCommitsForDir(sourceRefs, source.dir, seedBoundary)
+    : collectBranchCommits(sourceRefs, seedBoundary);
+
+  // 4. Filter: skip already replayed + skip commits that came from the other side
+  const newCommits = allCommits.filter(c => {
+    if (shaMapping.has(c.hash)) return false;
+    const meta = getCommitMeta(c.hash);
+    if (meta.message.includes(`${dir.skipTrailer}:`)) return false;
+    return true;
+  });
 
   if (newCommits.length === 0) {
-    const branchMapping = buildBranchMapping(remote, branches, shaMapping);
+    const branchMapping = opts.sourceBranch
+      ? new Map<string, string>()
+      : buildBranchMapping(source.remote, branches, shaMapping);
     return { mirrored: 0, branchMapping, upToDate: true };
   }
 
-  console.log(`Found ${newCommits.length} new commit(s) to mirror.\n`);
+  console.log(`Found ${newCommits.length} new commit(s) to replay.\n`);
 
-  // Use the seed commit as graft base — it's on main's history, so shadow
-  // branches share ancestry with main and can be merged with plain `git merge`.
-  const graftBase = findSeedCommit(dir);
-  if (graftBase) {
-    console.log(`Using seed commit ${graftBase.slice(0, 10)} as graft base (shared ancestry with main).`);
+  // 5. Graft base — for merge-compatible shadow branches.
+  // The graft base gives shadow branches shared ancestry with the target repo
+  // so `git merge` works cleanly. We try (in order):
+  //   a) The seed commit in workspace history (when workspace IS the target repo)
+  //   b) The target repo's main branch tip (when running from an orchestrator)
+  //   c) The seed hash from the source side (when target.dir is empty)
+  const seedCommit = findSeedCommit(pair.name);
+  let graftBase: string | null;
+  let baseTreeSource: string | null;
+
+  if (target.dir) {
+    // Target has a subdir — shadow commits need full-repo tree overlay.
+    // Use seed commit if it exists in the target repo's history (workspace IS
+    // the target). Otherwise fall back to the target's main branch tip (orchestrator).
+    const seedInTarget = seedCommit && refExists(`${target.remote}/main`)
+      && git(["merge-base", "--is-ancestor", seedCommit, `${target.remote}/main`], { safe: true }).ok;
+    graftBase = seedInTarget
+      ? seedCommit
+      : (refExists(`${target.remote}/main`) ? git(["rev-parse", `${target.remote}/main`]) : null);
+    baseTreeSource = graftBase;
+  } else {
+    // Target is at root — no full-repo overlay needed.
+    graftBase = seedHash ?? null;
+    baseTreeSource = null;
   }
 
-  const tmpIndex = path.join(os.tmpdir(), `shadow-topo-idx-${Date.now()}`);
+  if (graftBase) {
+    console.log(`Using graft base ${graftBase.slice(0, 10)} for shared ancestry.`);
+  }
 
+  // 6. Replay loop
+  const tmpIndex = path.join(os.tmpdir(), `shadow-replay-${Date.now()}`);
+
+  let lastSHA: string | null = null;
   try {
     for (const commit of newCommits) {
       const meta = getCommitMeta(commit.hash);
-      const isForwarded = meta.message.includes(`${FORWARD_TRAILER}:`);
 
-      if (isForwarded) {
-        console.log(`  Skipping ${meta.short} (forwarded by us).`);
+      // Commits that carry the skip trailer came from the other direction
+      // (e.g. forwarded by us then echoed back) — record but don't replay content
+      const isEcho = meta.message.includes(`${dir.addTrailer}:`);
+
+      if (isEcho) {
+        console.log(`  Skipping ${meta.short} (echo from other direction).`);
       } else {
         const label = commit.parents.length > 1
           ? `merge commit ${meta.short}`
           : commit.parents.length === 0
             ? `root commit ${meta.short}`
             : meta.short;
-        console.log(`  Applying ${label}...`);
+        console.log(`  Replaying ${label}...`);
       }
 
-      const localParents = resolveParents(commit, shaMapping, graftBase);
+      const mappedParents = resolveParents(commit, shaMapping, graftBase);
 
-      // Build full-repo tree: always use the seed commit tree as the base, then
-      // overlay dir/ from external. This ensures shadow commits carry the full
-      // repo tree so merging the shadow branch into main doesn't delete files.
-      // Using seed (not parent) as base guarantees correctness even when older
-      // synced commits had incomplete trees (pre-seed history).
-      const baseTree = graftBase
-        ? `${graftBase}^{tree}`
-        : localParents.length > 0
-          ? `${localParents[0]}^{tree}`
+      const baseTree = baseTreeSource
+        ? `${baseTreeSource}^{tree}`
+        : mappedParents.length > 0 && target.dir
+          ? `${mappedParents[0]}^{tree}`
           : null;
 
-      if (baseTree) {
-        git(["read-tree", baseTree], { env: { GIT_INDEX_FILE: tmpIndex } });
-        // Remove old dir/ content, then overlay new external content
-        git(["rm", "-r", "--cached", "--quiet", "-f", `${dir}/`], { env: { GIT_INDEX_FILE: tmpIndex }, safe: true });
-        git(["read-tree", `--prefix=${dir}/`, `${commit.hash}^{tree}`], { env: { GIT_INDEX_FILE: tmpIndex } });
-      } else {
-        // No base tree available — fall back to dir/-only tree (orphan)
-        git(["read-tree", "--empty"], { env: { GIT_INDEX_FILE: tmpIndex } });
-        git(["read-tree", `--prefix=${dir}/`, `${commit.hash}^{tree}`], { env: { GIT_INDEX_FILE: tmpIndex } });
-      }
-      const tree = git(["write-tree"], { env: { GIT_INDEX_FILE: tmpIndex } });
-
-      // Build commit message with sync trailer
-      let message: string;
-      if (isForwarded) {
-        message = appendTrailer(stripTrailers(meta.message), `${SYNC_TRAILER}: ${commit.hash}`);
-      } else {
-        message = appendTrailer(meta.message, `${SYNC_TRAILER}: ${commit.hash}`);
-      }
-
-      // Create commit with explicit parents via git plumbing
-      const parentArgs = localParents.flatMap(p => ["-p", p]);
-      const newSHA = git(["commit-tree", tree, ...parentArgs, "-m", message], {
-        env: commitEnv(meta),
+      const tree = buildRemappedTree({
+        commitHash: commit.hash,
+        sourceDir: source.dir,
+        targetDir: target.dir,
+        baseTree,
+        tmpIndex,
+        shadowIgnoreFile: source.ignore,
       });
 
-      shaMapping.set(commit.hash, newSHA);
-      console.log(isForwarded ? "  ✓ Recorded." : "  ✓ Mirrored.");
-    }
-  } finally {
-    fs.rmSync(tmpIndex, { force: true });
-  }
-
-  const branchMapping = buildBranchMapping(remote, branches, shaMapping);
-
-  console.log();
-  console.log(`Done. ${newCommits.length} commit(s) mirrored with preserved topology.`);
-
-  return { mirrored: newCommits.length, branchMapping, upToDate: false };
-}
-
-// ── Reverse replay (export direction) ────────────────────────────────────────
-
-const FORWARD_HASH_RE = new RegExp(`^${FORWARD_TRAILER}:\\s*([0-9a-f]{7,40})`);
-
-/**
- * Collect local commits that touch dir/ in topological order.
- * Uses git rev-list on the local branch, filtering to commits that touch dir/.
- */
-function collectLocalCommitsForDir(
-  dir: string,
-  branch: string,
-  seedCommit?: string,
-): TopoCommit[] {
-  const args = ["rev-list", "--topo-order", "--reverse", "--parents"];
-  if (seedCommit) {
-    args.push(`${seedCommit}..${branch}`);
-  } else {
-    args.push(branch);
-  }
-  args.push("--", `${dir}/`);
-
-  const result = git(args, { safe: true });
-  if (!result.ok || !result.stdout) return [];
-  return parseRevList(result.stdout);
-}
-
-/**
- * Replay local commits to an external remote, stripping the dir/ prefix.
- * This is the reverse of replayCommitsIncoming — instead of adding a prefix,
- * we strip it. The result is pushed to a shadow branch on the external repo
- * so the external team can `git merge` to pull in changes.
- *
- * Uses git plumbing:
- *   - `git read-tree <commit>:{dir}` to strip the prefix (reads subtree at root)
- *   - `git commit-tree` to create commits with explicit parents
- *
- * Skips commits that have a SYNC_TRAILER (they came from external, no echo-back).
- */
-export function replayCommitsOutgoing(opts: {
-  remote: string;
-  dir: string;
-  localBranch: string;
-  externalBranch: string;
-  shadowIgnoreFile?: string;
-}): { mirrored: number; tipSHA: string | null; upToDate: boolean } {
-  const { remote, dir, localBranch, externalBranch } = opts;
-
-  // The external shadow branch where we push stripped commits.
-  // Convention: shadow/{localBranchName} on the external repo.
-  const extShadowBranch = `${SHADOW_BRANCH_PREFIX}/${externalBranch}`;
-
-  console.log("Scanning external history for already-forwarded commits...");
-  const refs = [`${remote}/${extShadowBranch}`].filter(r => refExists(r));
-  const shaMapping = refs.length > 0
-    ? buildTrailerMapping(["log", ...refs, `--grep=^${FORWARD_TRAILER}:`], FORWARD_HASH_RE)
-    : new Map<string, string>();
-  console.log(`Found ${shaMapping.size} previously forwarded commit(s).`);
-
-  // Find the seed commit (on local main) and the seed hash (external tip at seed time)
-  const seedCommit = findSeedCommit(dir);
-  const seedHash = findSeedHash(dir);
-  if (seedCommit) {
-    console.log(`Found seed commit: ${seedCommit.slice(0, 10)}`);
-  }
-
-  // Collect local commits that touch dir/ since the seed
-  const allCommits = collectLocalCommitsForDir(dir, localBranch, seedCommit ?? undefined);
-  const newCommits = allCommits.filter(c => {
-    // Skip already forwarded
-    if (shaMapping.has(c.hash)) return false;
-    // Skip commits that came from external (have sync trailer)
-    const meta = getCommitMeta(c.hash);
-    if (meta.message.includes(`${SYNC_TRAILER}:`)) return false;
-    return true;
-  });
-
-  if (newCommits.length === 0) {
-    return { mirrored: 0, tipSHA: null, upToDate: true };
-  }
-
-  console.log(`Found ${newCommits.length} new commit(s) to forward.\n`);
-
-  // Graft base: the external commit that the seed points to.
-  // This gives the external shadow branch shared ancestry with the external main.
-  const graftBase = seedHash ?? null;
-  if (graftBase) {
-    console.log(`Using external seed ${graftBase.slice(0, 10)} as graft base.`);
-  }
-
-  const tmpIndex = path.join(os.tmpdir(), `shadow-fwd-idx-${Date.now()}`);
-
-  let lastSHA: string | null = null;
-  try {
-    for (const commit of newCommits) {
-      const meta = getCommitMeta(commit.hash);
-      const label = commit.parents.length > 1
-        ? `merge commit ${meta.short}`
-        : meta.short;
-      console.log(`  Forwarding ${label}...`);
-
-      // Build stripped tree: read dir/ subtree at root level
-      const dirTree = git(["rev-parse", `${commit.hash}:${dir}`], { safe: true });
-      if (!dirTree.ok) {
-        console.log(`  Skipping ${meta.short} (no ${dir}/ content).`);
+      if (!tree) {
+        console.log(`  Skipping ${meta.short} (source content missing).`);
         continue;
       }
-      git(["read-tree", "--empty"], { env: { GIT_INDEX_FILE: tmpIndex } });
-      git(["read-tree", dirTree.stdout], { env: { GIT_INDEX_FILE: tmpIndex } });
 
-      // Apply .shadowignore if provided
-      if (opts.shadowIgnoreFile && fs.existsSync(opts.shadowIgnoreFile)) {
-        const ignored = git(
-          ["ls-files", "--cached", "-i", "--exclude-from", opts.shadowIgnoreFile],
-          { env: { GIT_INDEX_FILE: tmpIndex } },
-        ).split("\n").filter(Boolean);
-        for (let i = 0; i < ignored.length; i += 100) {
-          git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)],
-            { env: { GIT_INDEX_FILE: tmpIndex }, safe: true });
-        }
-      }
+      const msg = isEcho
+        ? appendTrailer(stripTrailers(meta.message), `${dir.addTrailer}: ${commit.hash}`)
+        : appendTrailer(meta.message, `${dir.addTrailer}: ${commit.hash}`);
 
-      const tree = git(["write-tree"], { env: { GIT_INDEX_FILE: tmpIndex } });
-
-      const extParents = resolveParents(commit, shaMapping, graftBase);
-
-      // Build commit message with forward trailer
-      const message = appendTrailer(stripTrailers(meta.message), `${FORWARD_TRAILER}: ${commit.hash}`);
-
-      const parentArgs = extParents.flatMap(p => ["-p", p]);
-      const newSHA = git(["commit-tree", tree, ...parentArgs, "-m", message], {
+      const parentArgs = mappedParents.flatMap(p => ["-p", p]);
+      const newSHA = git(["commit-tree", tree, ...parentArgs, "-m", msg], {
         env: commitEnv(meta),
       });
 
       shaMapping.set(commit.hash, newSHA);
       lastSHA = newSHA;
-      console.log("  ✓ Forwarded.");
+      console.log(isEcho ? "  ✓ Recorded." : "  ✓ Replayed.");
     }
   } finally {
     fs.rmSync(tmpIndex, { force: true });
   }
 
-  console.log();
-  console.log(`Done. ${newCommits.length} commit(s) forwarded.`);
+  const branchMapping = opts.sourceBranch
+    ? new Map([[branches[0] ?? "main", lastSHA!]])
+    : buildBranchMapping(source.remote, branches, shaMapping);
 
-  return { mirrored: newCommits.length, tipSHA: lastSHA, upToDate: false };
+  console.log();
+  console.log(`Done. ${newCommits.length} commit(s) replayed.`);
+
+  return { mirrored: newCommits.length, branchMapping, upToDate: false };
 }

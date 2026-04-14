@@ -1,22 +1,18 @@
 #!/usr/bin/env ts-node
 /**
- * shadow-setup.ts — Initialize shadow sync for a remote.
+ * shadow-setup.ts — Record a seed baseline for a pair.
  *
- * Sets up the shadow branch and seed baseline so that CI sync and
- * shadow-export can operate. Run this once per remote when bootstrapping.
- *
- * What it does:
- *   1. Fetches from the external remote
- *   2. Records a seed commit so CI sync skips existing history
+ * Tells shadow-sync where to start — commits before the seed are skipped.
+ * Run once per pair when bootstrapping.
  *
  * Usage:
  *   npx tsx shadow-setup.ts -r backend
- *   npx tsx shadow-setup.ts -r frontend -b feature/auth
+ *   npx tsx shadow-setup.ts -r backend --from a
  */
 import { parseArgs } from "util";
 import {
-  REMOTES, SEED_TRAILER,
-  git, refExists, listExternalBranches,
+  PAIRS, SEED_TRAILER,
+  git, refExists, listBranches, ensureRemote,
   getCurrentBranch, appendTrailer,
   validateName, die,
   preflightChecks, handlePreflightResults,
@@ -25,7 +21,7 @@ import {
 const { values } = parseArgs({
   options: {
     remote:  { type: "string",  short: "r" },
-    dir:     { type: "string",  short: "d" },
+    from:    { type: "string",  short: "f" },
     branch:  { type: "string",  short: "b" },
     help:    { type: "boolean", short: "h" },
   },
@@ -33,67 +29,66 @@ const { values } = parseArgs({
 });
 
 if (values.help) {
-  console.log("Usage: shadow-setup.ts [-r remote] [-d dir] [-b branch]");
-  console.log("  -r  Remote name             (default: first entry in REMOTES)");
-  console.log("  -d  Local subdirectory       (default: inferred from remote config)");
-  console.log("  -b  Branch to set up         (default: your current branch)");
+  console.log("Usage: shadow-setup.ts [-r pair] [--from a|b] [-b branch]");
+  console.log("  -r  Pair name                (default: first pair)");
+  console.log("  --from  Which side to seed from (default: b)");
+  console.log("  -b  Branch to seed           (default: current branch)");
   process.exit(0);
 }
 
-// ── Resolve config ───────────────────────────────────────────────────────────
+const pair = values.remote
+  ? PAIRS.find(p => p.name === values.remote)
+  : PAIRS[0];
 
-const localBranch = getCurrentBranch();
-
-const remoteEntry = values.remote
-  ? REMOTES.find(r => r.remote === values.remote)
-  : REMOTES[0];
-
-if (values.remote && !remoteEntry) {
-  die(`Remote '${values.remote}' not found in REMOTES. Add it to shadow-config.json.`);
+if (values.remote && !pair) {
+  die(`Pair '${values.remote}' not found in config.`);
+}
+if (!pair) {
+  die("No pairs configured in shadow-config.json.");
 }
 
-const remote     = values.remote ?? remoteEntry!.remote;
-const dir        = values.dir    ?? remoteEntry!.dir;
-const externalBranch = values.branch ?? localBranch;
-validateName(remote, "Remote name");
-validateName(dir, "Directory");
+const fromSide = (values.from ?? "b") as "a" | "b";
+if (fromSide !== "a" && fromSide !== "b") {
+  die(`--from must be "a" or "b", got "${values.from}".`);
+}
 
-const externalRef      = `${remote}/${externalBranch}`;
+const source = fromSide === "a" ? pair.a : pair.b;
+const targetBranch = values.branch ?? getCurrentBranch();
+validateName(pair.name, "Pair name");
+validateName(source.remote, "Remote name");
 
-console.log(`Remote        : ${remote}`);
-console.log(`Directory     : ${dir}/`);
-console.log(`External branch   : ${externalBranch}`);
+const targetRef = `${source.remote}/${targetBranch}`;
+
+console.log(`Pair          : ${pair.name}`);
+console.log(`Seeding from  : ${fromSide} (${source.remote})`);
+console.log(`Branch        : ${targetBranch}`);
 console.log();
 
-// ── Fetch external remote ────────────────────────────────────────────────────
+ensureRemote(pair.a);
+ensureRemote(pair.b);
 
-console.log(`Fetching from '${remote}'...`);
-git(["fetch", remote]);
+console.log(`Fetching from '${source.remote}'...`);
+git(["fetch", source.remote]);
 
-if (!refExists(externalRef)) {
-  console.error(`✘ '${externalRef}' does not exist. Available branches on '${remote}':`);
-  listExternalBranches(remote).forEach(b => console.error(`  ${b}`));
+if (!refExists(targetRef)) {
+  console.error(`✘ '${targetRef}' does not exist. Available branches on '${source.remote}':`);
+  listBranches(source.remote).forEach(b => console.error(`  ${b}`));
   process.exit(1);
 }
 
-// Pre-flight checks
-const warnings = preflightChecks(externalRef);
+const warnings = preflightChecks(targetRef);
 if (!handlePreflightResults(warnings)) {
   process.exit(1);
 }
 
-// ── Seed ─────────────────────────────────────────────────────────────────────
-
-const tipHash = git(["rev-parse", externalRef]);
+const tipHash = git(["rev-parse", targetRef]);
 const msg = appendTrailer(
-  `Seed shadow-sync for ${dir}/ from ${externalRef}`,
-  `${SEED_TRAILER}: ${dir} ${tipHash}`,
+  `Seed shadow-sync for ${pair.name} from ${targetRef}`,
+  `${SEED_TRAILER}: ${pair.name} ${tipHash}`,
 );
 git(["commit", "--allow-empty", "-m", msg]);
 
-console.log(`✓ Seeded: CI sync for '${dir}/' will start after ${tipHash.slice(0, 10)}.`);
+console.log(`✓ Seeded: sync for '${pair.name}' will start after ${tipHash.slice(0, 10)}.`);
 console.log();
 console.log("Next steps:");
-console.log(`  1. Push this commit:  git push`);
-console.log(`  2. Trigger CI sync or wait for the next cron run`);
-console.log(`  3. Export changes:    npm run export -- -r ${remote} -m "your message"`);
+console.log(`  1. Run sync:  npm --prefix shadow run sync -- -r ${pair.name} --from ${fromSide}`);

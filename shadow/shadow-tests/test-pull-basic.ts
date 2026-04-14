@@ -11,7 +11,7 @@ export default function run() {
     // CI sync replays them into shadow branch
     const r1 = runCiSync(env);
     assertEqual(r1.status, 0, "ci-sync should succeed");
-    assertIncludes(r1.stdout, "Mirrored", "should mirror commits");
+    assertIncludes(r1.stdout, "Replayed", "should replay commits");
 
     // Files exist on shadow branch
     assertEqual(readShadowFile(env, "app.ts"), "console.log('hello');\n", "app.ts content");

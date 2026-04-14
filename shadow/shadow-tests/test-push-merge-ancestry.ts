@@ -18,9 +18,9 @@ export default function run() {
     assertEqual(r.status, 0, "push should succeed");
 
     // Fetch the external's shadow branch and check ancestry
-    git(`fetch ${env.remoteName} shadow/main`, env.localRepo);
+    git(`fetch ${env.remoteName} shadow/${env.subdir}/main`, env.localRepo);
     const parentCount = git(
-      `rev-list --parents -1 ${env.remoteName}/shadow/main`,
+      `rev-list --parents -1 ${env.remoteName}/shadow/${env.subdir}/main`,
       env.localRepo,
     ).split(/\s+/).length - 1;
 
@@ -29,14 +29,14 @@ export default function run() {
 
     // The parent should be the external seed hash (the tip of external/main at seed time)
     const parent = git(
-      `rev-list --parents -1 ${env.remoteName}/shadow/main`,
+      `rev-list --parents -1 ${env.remoteName}/shadow/${env.subdir}/main`,
       env.localRepo,
     ).split(/\s+/)[1];
     const seedTip = git(`rev-parse ${env.remoteName}/main`, env.localRepo);
     assertEqual(parent, seedTip, "parent should be the external seed hash");
 
     // Commit message should have the forward trailer
-    const msg = git(`log -1 --format=%B ${env.remoteName}/shadow/main`, env.localRepo);
+    const msg = git(`log -1 --format=%B ${env.remoteName}/shadow/${env.subdir}/main`, env.localRepo);
     assertIncludes(msg, "Shadow-forwarded-from:", "commit should have forward trailer");
   } finally {
     env.cleanup();

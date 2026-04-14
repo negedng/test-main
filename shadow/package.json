@@ -1,12 +1,11 @@
 {
   "name": "shadow-sync",
-  "version": "1.0.0",
-  "description": "Bi-directional git sync between internal and external team repositories",
+  "version": "3.0.0",
+  "description": "Bi-directional git sync between repositories with path prefix remapping",
   "private": true,
   "scripts": {
     "setup": "tsx shadow-setup.ts",
-    "ci-sync": "tsx shadow-ci-sync.ts",
-    "ci-forward": "tsx shadow-ci-forward.ts",
+    "sync": "tsx shadow-sync.ts",
     "test": "tsx shadow-tests/run-all.ts"
   },
   "devDependencies": {

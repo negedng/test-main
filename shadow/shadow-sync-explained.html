@@ -329,8 +329,8 @@
 │   └── server.ts
 ├── frontend/                       &larr; from seed (untouched)
 └── shadow/                         &larr; from seed
-    ├── shadow-ci-sync.ts
-    ├── shadow-ci-forward.ts
+    ├── shadow-sync.ts
+    ├── shadow-sync.ts
     ├── shadow-common.ts
     └── shadow-config.json</code></pre>
 
@@ -417,7 +417,7 @@
 <div class="card card-green">
   <div class="flow-step">
     <div class="flow-num">1</div>
-    <div><strong>CI sync runs every 15 minutes</strong> (GitHub Actions cron). The workflow file <a href=".github/workflows/shadow-sync.yml"><code>shadow-sync.yml</code></a> triggers <a href="#fn-ci-sync"><code>shadow-ci-sync.ts</code></a>.</div>
+    <div><strong>CI sync runs every 15 minutes</strong> (GitHub Actions cron). The workflow file <a href=".github/workflows/shadow-sync.yml"><code>shadow-sync.yml</code></a> triggers <a href="#fn-ci-sync"><code>shadow-sync.ts</code></a>.</div>
   </div>
   <div class="flow-step">
     <div class="flow-num">2</div>
@@ -454,7 +454,7 @@
 <div class="card card-orange">
   <div class="flow-step">
     <div class="flow-num">1</div>
-    <div><strong>Run <code>npm run ci-forward</code></strong> (locally or in CI). This runs <a href="#fn-ci-forward"><code>shadow-ci-forward.ts</code></a>, the mirror of ci-sync. You can also run it directly: <code>npx --prefix shadow tsx shadow/shadow-ci-forward.ts -r backend</code></div>
+    <div><strong>Run <code>npm run ci-forward</code></strong> (locally or in CI). This runs <a href="#fn-ci-forward"><code>shadow-sync.ts --from a</code></a>, the mirror of ci-sync. You can also run it directly: <code>npx --prefix shadow tsx shadow/shadow-sync.ts --from a -r backend</code></div>
   </div>
   <div class="flow-step">
     <div class="flow-num">2</div>
@@ -491,19 +491,19 @@
     <td><span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
-    <td><a href="shadow-ci-sync.ts"><code>shadow-ci-sync.ts</code></a></td>
+    <td><a href="shadow-sync.ts"><code>shadow-sync.ts</code></a></td>
     <td>Replays external commits into local shadow branches, adding <code>dir/</code> prefix (the "pull" direction) (<a href="#fn-ci-sync">details</a>)</td>
     <td><span class="tag tag-blue">CI</span> / <span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
-    <td><a href="shadow-ci-forward.ts"><code>shadow-ci-forward.ts</code></a></td>
+    <td><a href="shadow-sync.ts --from a"><code>shadow-sync.ts --from a</code></a></td>
     <td>Replays local commits to external shadow branches, stripping <code>dir/</code> prefix (the "push" direction) (<a href="#fn-ci-forward">details</a>)</td>
     <td><span class="tag tag-blue">CI</span> / <span class="tag tag-green">Local</span></td>
   </tr>
   <tr>
     <td><code>.shadowignore</code></td>
     <td>Glob patterns for files to exclude when forwarding (like <code>.gitignore</code> but for shadow sync) (<a href="#fn-parseShadowIgnore">parsed by <code>parseShadowIgnore</code></a>)</td>
-    <td>Read by <a href="shadow-ci-forward.ts"><code>shadow-ci-forward.ts</code></a></td>
+    <td>Read by <a href="shadow-sync.ts --from a"><code>shadow-sync.ts --from a</code></a></td>
   </tr>
   <tr>
     <td><a href="package.json"><code>package.json</code></a></td>
@@ -612,7 +612,7 @@
     <ol>
       <li>Checks out repo with full history (<code>fetch-depth: 0</code>)</li>
       <li>Installs Node.js 20 and runs <code>npm ci</code></li>
-      <li>Runs <code>shadow-ci-sync.ts</code> (reads remote URLs from <code>shadow-config.json</code>)</li>
+      <li>Runs <code>shadow-sync.ts</code> (reads remote URLs from <code>shadow-config.json</code>)</li>
     </ol>
     <p><strong>Concurrency:</strong> Group <code>shadow-sync</code>, won't cancel running syncs</p>
     <p><strong>Permissions:</strong> <code>contents: write</code> (needs to push shadow branches)</p>
@@ -625,7 +625,7 @@
       <li>Checks out repo with full history and <code>persist-credentials: false</code> (disables the default credential helper so the PAT is used instead)</li>
       <li>Installs Node.js 20 and runs <code>npm ci</code></li>
       <li>Configures git identity (<code>Shadow Sync</code>) and rewrites GitHub HTTPS URLs to use the PAT</li>
-      <li>Runs <code>shadow-ci-forward.ts</code> (reads remote URLs from <code>shadow-config.json</code>)</li>
+      <li>Runs <code>shadow-sync.ts --from a</code> (reads remote URLs from <code>shadow-config.json</code>)</li>
     </ol>
     <p><strong>Concurrency:</strong> Per-ref group (each shadow branch gets its own queue)</p>
     <p><strong>Permissions:</strong> <code>contents: read</code> (pushes to external, not origin). Requires an <code>EXTERNAL_REPO_TOKEN</code> secret for cross-repo push access &mdash; see <a href="#pat-setup">PAT setup</a>.</p>
@@ -876,7 +876,7 @@ git merge origin/shadow/backend/main</pre>
 
 <hr>
 
-<h3 id="fn-ci-sync"><a href="shadow-ci-sync.ts">shadow-ci-sync.ts</a> &mdash; CI Pull Script</h3>
+<h3 id="fn-ci-sync"><a href="shadow-sync.ts">shadow-sync.ts</a> &mdash; CI Pull Script</h3>
 
 <div class="card">
   <p><strong>Purpose:</strong> Runs in GitHub Actions. Fetches from all external remotes and replays new commits into shadow branches.</p>
@@ -896,7 +896,7 @@ git merge origin/shadow/backend/main</pre>
 
 <hr>
 
-<h3 id="fn-ci-forward"><a href="shadow-ci-forward.ts">shadow-ci-forward.ts</a> &mdash; Forward (Push) Script</h3>
+<h3 id="fn-ci-forward"><a href="shadow-sync.ts --from a">shadow-sync.ts --from a</a> &mdash; Forward (Push) Script</h3>
 
 <div class="card">
   <p><strong>Purpose:</strong> The mirror of ci-sync. Replays local commits to a shadow branch on the external remote, stripping the <code>dir/</code> prefix. The external team can then <code>git merge shadow/main</code> to pull in changes. Uses git plumbing (no worktree).</p>
@@ -1061,18 +1061,18 @@ git merge origin/shadow/backend/main</pre>
 <!-- ================================================================ -->
 <h2 id="cli">11. Command-Line Options</h2>
 
-<h3>shadow-ci-sync.ts</h3>
+<h3>shadow-sync.ts</h3>
 <pre><code>npm run ci-sync -- [-r remote]
-npx --prefix shadow tsx shadow/shadow-ci-sync.ts [-r remote]</code></pre>
+npx --prefix shadow tsx shadow/shadow-sync.ts [-r remote]</code></pre>
 <table>
   <tr><th>Flag</th><th>Long</th><th>Description</th><th>Default</th></tr>
   <tr><td><code>-r</code></td><td><code>--remote</code></td><td>Sync only this remote</td><td>All configured remotes</td></tr>
 </table>
 <p>After syncing, merge with: <code>git fetch origin && git merge origin/shadow/backend/main</code></p>
 
-<h3>shadow-ci-forward.ts</h3>
+<h3>shadow-sync.ts --from a</h3>
 <pre><code>npm run ci-forward -- [-r remote] [-b branch]
-npx --prefix shadow tsx shadow/shadow-ci-forward.ts [-r remote] [-b branch]</code></pre>
+npx --prefix shadow tsx shadow/shadow-sync.ts --from a [-r remote] [-b branch]</code></pre>
 <table>
   <tr><th>Flag</th><th>Long</th><th>Description</th><th>Default</th></tr>
   <tr><td><code>-r</code></td><td><code>--remote</code></td><td>Forward only this remote</td><td>All configured remotes</td></tr>

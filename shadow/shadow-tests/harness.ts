@@ -83,7 +83,7 @@ export function createTestEnv(name: string, subdir = "frontend", branchPrefix = 
   // Copy shadow scripts and config into local repo so they run from there
   const scriptDir = path.resolve(__dirname, "..");
   const scripts = [
-    "shadow-common.ts", "shadow-ci-sync.ts", "shadow-ci-forward.ts",
+    "shadow-common.ts", "shadow-sync.ts",
   ];
   for (const f of scripts) {
     fs.copyFileSync(path.join(scriptDir, f), path.join(localRepo, f));
@@ -238,9 +238,14 @@ function buildEnv(env: TestEnv): Record<string, string> {
     ...process.env as Record<string, string>,
     SHADOW_PUSH_ORIGIN: "origin",
   };
-  // Always use SHADOW_TEST_REMOTES (JSON format) so the URL is included.
-  base.SHADOW_TEST_REMOTES = JSON.stringify(
-    env.remotes.map(r => ({ remote: r.remoteName, dir: r.subdir, url: r.remoteBare }))
+  // Always use SHADOW_TEST_PAIRS (JSON format) so the URL is included.
+  const ignorePath = path.join(env.localRepo, ".shadowignore").replace(/\\/g, "/");
+  base.SHADOW_TEST_PAIRS = JSON.stringify(
+    env.remotes.map(r => ({
+      name: r.subdir,
+      a: { remote: "origin", dir: r.subdir, ignore: ignorePath },
+      b: { remote: r.remoteName, url: r.remoteBare, dir: "" },
+    }))
   );
   return base;
 }
@@ -283,7 +288,7 @@ function runScript(env: TestEnv, script: string, args: string[], envVars: Record
  * After running, checks out main so the local repo is in a clean state.
  */
 export function runCiSync(env: TestEnv): RunResult {
-  const result = runScript(env, "shadow-ci-sync.ts", [], ciEnv(env));
+  const result = runScript(env, "shadow-sync.ts", ["--from", "b"], ciEnv(env));
   // CI sync switches branches; restore main for subsequent operations
   try { git("checkout main", env.localRepo); } catch { /* may already be on main */ }
   return result;
@@ -295,14 +300,14 @@ export function runCiSync(env: TestEnv): RunResult {
  */
 /** Run shadow-ci-forward.ts — replay local commits to external shadow branch. */
 export function runCiForward(env: TestEnv, remote?: RemoteInfo): RunResult {
-  const name = remote?.remoteName ?? env.remoteName;
-  return runScript(env, "shadow-ci-forward.ts", ["-r", name], localEnv(env));
+  const pairName = remote?.subdir ?? env.subdir;
+  return runScript(env, "shadow-sync.ts", ["--from", "a", "-r", pairName], localEnv(env));
 }
 
 /** Alias — runExport and runCiForward are now the same operation. */
 export function runExport(env: TestEnv, _message?: string, extraArgs: string[] = [], remote?: RemoteInfo): RunResult {
-  const name = remote?.remoteName ?? env.remoteName;
-  return runScript(env, "shadow-ci-forward.ts", ["-r", name, ...extraArgs], localEnv(env));
+  const pairName = remote?.subdir ?? env.subdir;
+  return runScript(env, "shadow-sync.ts", ["--from", "a", "-r", pairName, ...extraArgs], localEnv(env));
 }
 
 /** Alias for runExport. */
@@ -375,7 +380,8 @@ export function getShadowLogFull(env: TestEnv, n = 20, remote?: RemoteInfo): str
  */
 export function readExternalShadowFile(env: TestEnv, rel: string, remote?: RemoteInfo): string | null {
   const remoteName = remote?.remoteName ?? env.remoteName;
-  const shadowBranch = `${env.branchPrefix}/main`;
+  const subdir = remote?.subdir ?? env.subdir;
+  const shadowBranch = `${env.branchPrefix}/${subdir}/main`;
   try { git(`fetch ${remoteName} ${shadowBranch}`, env.localRepo); } catch { return null; }
   try {
     const content = execSync(`git show ${remoteName}/${shadowBranch}:${rel}`, {
@@ -390,7 +396,8 @@ export function readExternalShadowFile(env: TestEnv, rel: string, remote?: Remot
 /** Get full commit messages from the external remote's shadow branch. */
 export function getExternalShadowLogFull(env: TestEnv, n = 20, remote?: RemoteInfo): string {
   const remoteName = remote?.remoteName ?? env.remoteName;
-  const shadowBranch = `${env.branchPrefix}/main`;
+  const subdir = remote?.subdir ?? env.subdir;
+  const shadowBranch = `${env.branchPrefix}/${subdir}/main`;
   try { git(`fetch ${remoteName} ${shadowBranch}`, env.localRepo); } catch { return ""; }
   try {
     return git(`log ${remoteName}/${shadowBranch} --format="%B" -${n}`, env.localRepo);

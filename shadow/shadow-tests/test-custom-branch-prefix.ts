@@ -26,7 +26,7 @@ export default function run() {
     commitOnLocal(env, { "feature.ts": "export const x = 1;\n" }, "Add feature");
     const r2 = runPush(env, "Push feature");
     assertEqual(r2.status, 0, "export should succeed with custom prefix");
-    assertIncludes(r2.stdout, "shd/main", "export output should reference custom prefix branch on external");
+    assertIncludes(r2.stdout, "shd/frontend/main", "export output should reference custom prefix branch on external");
 
     // Verify on external's shadow branch (export side — no prefix)
     assertEqual(

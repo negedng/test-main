@@ -35,9 +35,9 @@ export default function run() {
     assertEqual(r.status, 0, "push with binary file should succeed");
 
     // Verify on external's shadow branch by extracting the file via git show
-    git(`fetch ${env.remoteName} shadow/main`, env.localRepo);
+    git(`fetch ${env.remoteName} shadow/${env.subdir}/main`, env.localRepo);
     const result = execSync(
-      `git show ${env.remoteName}/shadow/main:image.png`,
+      `git show ${env.remoteName}/shadow/${env.subdir}/main:image.png`,
       { cwd: env.localRepo, stdio: ["pipe", "pipe", "pipe"] },
     );
     assertEqual(result.length, binaryContent.length, "binary file size should match");

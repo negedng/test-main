@@ -56,9 +56,9 @@ export default function run() {
 
     // Walk ALL commits on the external's shadow branch
     // and verify secret.env never appears in any tree.
-    git(`fetch ${env.remoteName} shadow/main`, env.localRepo);
+    git(`fetch ${env.remoteName} shadow/${env.subdir}/main`, env.localRepo);
     const commits = git(
-      `log ${env.remoteName}/shadow/main --format=%H`,
+      `log ${env.remoteName}/shadow/${env.subdir}/main --format=%H`,
       env.localRepo,
     ).split("\n").filter(Boolean);
 
