@@ -1,16 +1,18 @@
 name: Shadow Sync (Pull)
 
 on:
-  schedule:
-    - cron: '*/15 * * * *'   # Every 15 minutes
-  workflow_dispatch:          # Manual trigger
+  # Disabled until real repo URLs are configured in shadow/shadow-config.json.
+  # Uncomment the cron schedule when ready:
+  # schedule:
+  #   - cron: '*/15 * * * *'
+  workflow_dispatch:          # Manual trigger only
 
 concurrency:
   group: shadow-sync
-  cancel-in-progress: false   # Let running syncs complete
+  cancel-in-progress: false
 
 permissions:
-  contents: write             # Needed to push shadow branches
+  contents: write
 
 jobs:
   sync:
@@ -18,7 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0      # Full history required for trailer-based dedup
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
