@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import { createTestEnv, commitOnRemote, commitOnLocal, runCiSync, mergeShadow, runPush, readExternalShadowFile } from "./harness";
 import { assertEqual } from "./assert";
 
@@ -14,11 +12,9 @@ export default function run() {
     mergeShadow(env);
     assertEqual(r1.status, 0, "initial pull should succeed");
 
-    // Create .shadowignore with a ** pattern to exclude CLAUDE.md everywhere
-    fs.writeFileSync(path.join(env.localRepo, ".shadowignore"), "**/CLAUDE.md\n");
-
-    // Add files at various depths, including CLAUDE.md at root and nested
+    // Add .shadowignore with ** pattern alongside the source files
     commitOnLocal(env, {
+      ".shadowignore": "**/CLAUDE.md\n",
       "app.ts": "export const app = true;\n",
       "CLAUDE.md": "# root claude\n",
       "src/CLAUDE.md": "# nested claude\n",

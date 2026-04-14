@@ -239,11 +239,10 @@ function buildEnv(env: TestEnv): Record<string, string> {
     SHADOW_PUSH_ORIGIN: "origin",
   };
   // Always use SHADOW_TEST_PAIRS (JSON format) so the URL is included.
-  const ignorePath = path.join(env.localRepo, ".shadowignore").replace(/\\/g, "/");
   base.SHADOW_TEST_PAIRS = JSON.stringify(
     env.remotes.map(r => ({
       name: r.subdir,
-      a: { remote: "origin", dir: r.subdir, ignore: ignorePath },
+      a: { remote: "origin", dir: r.subdir },
       b: { remote: r.remoteName, url: r.remoteBare, dir: "" },
     }))
   );

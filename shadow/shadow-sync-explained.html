@@ -419,8 +419,7 @@ shadow-sync --from a</code></pre>
       "a": {
         "remote": "repo-a",
         "url": "https://github.com/org/repo-a.git",
-        "dir": "backend",
-        "ignore": "shadow/.shadowignore"
+        "dir": "backend"
       },
       "b": {
         "remote": "repo-b",
@@ -450,7 +449,7 @@ shadow-sync --from a</code></pre>
     <tr><td><code>pairs[].a.remote</code></td><td>Git remote name for endpoint A (e.g. <code>"origin"</code>, <code>"repo-a"</code>).</td></tr>
     <tr><td><code>pairs[].a.url</code></td><td>Git URL for the remote. Optional &mdash; omit if the remote already exists (e.g. <code>"origin"</code>).</td></tr>
     <tr><td><code>pairs[].a.dir</code></td><td>Path prefix in this repo. <code>"backend"</code> means files live under <code>backend/</code>. Empty string <code>""</code> means files are at the repo root.</td></tr>
-    <tr><td><code>pairs[].a.ignore</code></td><td>Optional path to a <code>.shadowignore</code> file. Controls what this endpoint sends to the other side.</td></tr>
+    
     <tr><td><code>trailers</code></td><td>Customizable trailer names for sync, seed, forward, and export markers.</td></tr>
     <tr><td><code>gitConfigOverrides</code></td><td>Git config key/value pairs applied via <code>-c</code> flags on every git command for cross-platform consistency.</td></tr>
     <tr><td><code>maxBuffer</code></td><td>Maximum buffer size in bytes for git command output (default: 50 MB).</td></tr>
@@ -505,7 +504,7 @@ shadow-sync --from a</code></pre>
   <div class="step">
     <span class="step-num">4</span>
     <div>
-      <strong>Apply .shadowignore.</strong> If the source endpoint has an <code>ignore</code> file configured,
+      <strong>Apply .shadowignore.</strong> If the source commit contains a <code>.shadowignore</code> file,
       remove matching files from the temporary index before writing the tree.
     </div>
   </div>
@@ -671,8 +670,7 @@ shadow-sync --from a</code></pre>
 <div class="card">
   <h3><span class="tag tag-purple">Filter</span> Per-endpoint file exclusion</h3>
   <p>
-    Each endpoint in a pair can have an optional <code>ignore</code> field pointing to a <code>.shadowignore</code> file.
-    This file contains glob patterns (one per line) for files that this endpoint should <strong>not send</strong> to the
+    Works like <code>.gitignore</code> — commit a <code>.shadowignore</code> file in your repo and it is automatically discovered from the source commit's tree during replay. This file contains glob patterns (one per line) for files that this endpoint should <strong>not send</strong> to the
     other side.
   </p>
   <pre><code># .shadowignore example
@@ -693,7 +691,7 @@ coverage/</code></pre>
     <code>git write-tree</code> finalizes the tree hash.
   </p>
   <div class="callout">
-    <strong>Note:</strong> Each side controls what it sends. RepoA's <code>.shadowignore</code> controls what
+    <strong>Note:</strong> Place <code>.shadowignore</code> at the root of the synced content (e.g. <code>backend/.shadowignore</code> in RepoA, <code>.shadowignore</code> in RepoB). Each side controls what
     RepoA sends to RepoB (during <code>--from a</code>). RepoB's ignore controls what RepoB sends to RepoA
     (during <code>--from b</code>).
   </div>
@@ -775,7 +773,7 @@ coverage/</code></pre>
     <tr><td><code>stripTrailers(message)</code></td><td>Removes all <code>Shadow-*</code> trailers from a commit message to produce a clean message for the replayed commit (before adding the new direction-specific trailer).</td></tr>
     <tr><td><code>buildTrailerMapping(logArgs, trailerRe)</code></td><td>Scans <code>git log</code> output for trailer-based SHA mappings. Used to build the initial SHA mapping from previously replayed commits.</td></tr>
     <tr><td><code>resolveParents(commit, shaMapping, graftBase)</code></td><td>Maps a source commit's parents to their replayed equivalents using the SHA mapping. Falls back to the graft base for parents that predate the seed.</td></tr>
-    <tr><td><code>buildRemappedTree(opts)</code></td><td>Unified tree builder. Handles prefix add/strip, base tree overlay, and <code>.shadowignore</code> filtering. Returns a tree hash.</td></tr>
+    <tr><td><code>buildRemappedTree(opts)</code></td><td>Unified tree builder. Handles prefix add/strip, base tree overlay, and auto-discovers <code>.shadowignore</code> from the source commit. Returns a tree hash.</td></tr>
     <tr><td><code>collectBranchCommits(refs, seedHash?)</code></td><td>Collects commits from remote branch refs in topological order. Stops at the seed boundary if provided.</td></tr>
     <tr><td><code>collectCommitsForDir(refs, dir, seedBoundary?)</code></td><td>Like <code>collectBranchCommits</code> but filters to only commits that touch the given <code>dir/</code> path.</td></tr>
     <tr><td><code>buildBranchMapping(remote, branches, shaMapping)</code></td><td>After replay, maps branch names to their final replayed SHA using the mapping table.</td></tr>

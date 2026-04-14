@@ -1,7 +1,5 @@
 import { execSync } from "child_process";
-import * as fs from "fs";
-import * as path from "path";
-import { createTestEnv, commitOnLocal, mergeShadow, runPush, readExternalShadowFile } from "./harness";
+import { createTestEnv, commitOnLocal, runPush, readExternalShadowFile } from "./harness";
 import { assertEqual } from "./assert";
 
 function git(cmd: string, cwd: string): string {
@@ -20,17 +18,13 @@ function git(cmd: string, cwd: string): string {
 export default function run() {
   const env = createTestEnv("push-ignore-tree");
   try {
-    // Write a .shadowignore that excludes secret.env
-    const ignorePath = path.join(env.localRepo, ".shadowignore");
-    fs.writeFileSync(ignorePath, "secret.env\n");
-    git("add .shadowignore", env.localRepo);
-    git('commit -m "Add .shadowignore"', env.localRepo);
-
-    // Commit both a normal file and a shadowignored file
+    // Commit .shadowignore alongside source files (under subdir).
+    // The replay engine discovers it from the source commit's tree.
     commitOnLocal(env, {
+      ".shadowignore": "secret.env\n",
       "app.ts": "export const app = true;\n",
       "secret.env": "API_KEY=supersecret\n",
-    }, "Add app.ts and secret.env");
+    }, "Add app.ts, secret.env, and .shadowignore");
 
     // Export
     const r1 = runPush(env, "First export");

@@ -1,5 +1,3 @@
-import * as fs from "fs";
-import * as path from "path";
 import { createTestEnv, commitOnRemote, commitOnLocal, runCiSync, mergeShadow, runPush, readExternalShadowFile } from "./harness";
 import { assertEqual, assertIncludes } from "./assert";
 
@@ -12,14 +10,13 @@ export default function run() {
     mergeShadow(env);
     assertEqual(r1.status, 0, "initial pull should succeed");
 
-    // Create .shadowignore in the local repo (where scripts live)
-    fs.writeFileSync(path.join(env.localRepo, ".shadowignore"), "*.local\nsecrets/\n");
-
-    // Add both ignored and non-ignored files
+    // Add .shadowignore alongside the source files (committed to git so
+    // the replay engine discovers it from the source commit's tree).
     commitOnLocal(env, {
+      ".shadowignore": "*.local\nsecrets/\n",
       "app.ts": "export const app = true;\n",
       "config.local": "secret stuff\n",
-    }, "Add app and config");
+    }, "Add app, config, and shadowignore");
 
     // Push
     const r2 = runPush(env, "Push with shadowignore");

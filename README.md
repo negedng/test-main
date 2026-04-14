@@ -69,7 +69,6 @@ Each **pair** connects two repos (**a** and **b**) with a path mapping:
 - `a` and `b` are symmetric — direction is chosen at runtime with `--from`
 - `dir` is the path prefix in that repo (`""` for root, `"backend"` for a subdirectory)
 - `url` tells the tool how to reach the repo (omit if the remote already exists, e.g. `origin`)
-- `ignore` (optional) — path to a `.shadowignore` file that filters what this side sends
 
 The tool runs from any git repo. Both sides are equal peers.
 
@@ -99,14 +98,11 @@ git merge origin/shadow/backend/main
 
 ### `.shadowignore`
 
-Each endpoint can have its own ignore file — patterns for files to not send to the other side:
+Works like `.gitignore` — commit a `.shadowignore` file in your repo and it's automatically discovered during replay. Each side controls what it sends to the other.
 
-```json
-{
-  "a": { "remote": "repo-a", "url": "...", "dir": "backend", "ignore": "shadow/.shadowignore" },
-  "b": { "remote": "repo-b", "url": "...", "dir": "" }
-}
-```
+Place `.shadowignore` at the root of the synced content:
+- In RepoA (dir = `backend`): `backend/.shadowignore`
+- In RepoB (dir = ``): `.shadowignore`
 
 Example `.shadowignore`:
 ```
@@ -178,7 +174,7 @@ npm --prefix shadow test
 | `shadow/shadow-common.ts` | Config, git helpers, unified replay engine |
 | `shadow/shadow-setup.ts` | Bootstrap: records seed so sync skips existing history |
 | `shadow/shadow-sync.ts` | Single script for both directions (--from a or --from b) |
-| `shadow/.shadowignore` | Default ignore patterns |
+| `.shadowignore` | Ignore patterns (auto-discovered from source commit, like `.gitignore`) |
 | `shadow/shadow-sync-explained.html` | Detailed technical documentation |
 | `shadow/shadow-tests/` | 39 automated tests |
 | `.github/workflows/shadow-sync.yml` | CI pull workflow (cron) |

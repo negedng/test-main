@@ -12,8 +12,6 @@ export interface RepoEndpoint {
   url?: string;
   /** Path prefix in this repo ("backend", "" for root) */
   dir: string;
-  /** Path to a .shadowignore file — filters what this endpoint sends to the other side. */
-  ignore?: string;
 }
 
 export interface SyncPair {
@@ -375,7 +373,6 @@ function buildRemappedTree(opts: {
   targetDir: string;
   baseTree: string | null;
   tmpIndex: string;
-  shadowIgnoreFile?: string;
 }): string | null {
   const { commitHash, sourceDir, targetDir, baseTree, tmpIndex } = opts;
   const idxEnv = { GIT_INDEX_FILE: tmpIndex };
@@ -404,14 +401,24 @@ function buildRemappedTree(opts: {
     git(["read-tree", sourceTreeRef], { env: idxEnv });
   }
 
-  if (opts.shadowIgnoreFile && fs.existsSync(opts.shadowIgnoreFile)) {
-    const ignored = git(
-      ["ls-files", "--cached", "-i", "--exclude-from", opts.shadowIgnoreFile],
-      { env: idxEnv },
-    ).split("\n").filter(Boolean);
-    for (let i = 0; i < ignored.length; i += 100) {
-      git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)],
-        { env: idxEnv, safe: true });
+  // Auto-discover .shadowignore from the source commit's tree.
+  // The file can be at the source root (sourceDir/.shadowignore or just .shadowignore).
+  const ignorePath = sourceDir ? `${sourceDir}/.shadowignore` : ".shadowignore";
+  const ignoreContent = git(["show", `${commitHash}:${ignorePath}`], { safe: true });
+  if (ignoreContent.ok && ignoreContent.stdout) {
+    const tmpIgnore = path.join(os.tmpdir(), `shadow-ignore-${Date.now()}`);
+    try {
+      fs.writeFileSync(tmpIgnore, ignoreContent.stdout);
+      const ignored = git(
+        ["ls-files", "--cached", "-i", "--exclude-from", tmpIgnore],
+        { env: idxEnv },
+      ).split("\n").filter(Boolean);
+      for (let i = 0; i < ignored.length; i += 100) {
+        git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)],
+          { env: idxEnv, safe: true });
+      }
+    } finally {
+      fs.rmSync(tmpIgnore, { force: true });
     }
   }
 
@@ -647,7 +654,6 @@ export function replayCommits(opts: {
         targetDir: target.dir,
         baseTree,
         tmpIndex,
-        shadowIgnoreFile: source.ignore,
       });
 
       if (!tree) {
