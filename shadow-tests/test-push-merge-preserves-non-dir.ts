@@ -46,13 +46,6 @@ export default function run() {
       "root-config.json must survive shadow merge",
     );
 
-    // Verify the shadow scripts are still there (harness copies them to localRepo)
-    assertEqual(
-      fs.existsSync(path.join(env.localRepo, "shadow-common.ts")),
-      true,
-      "shadow-common.ts must survive shadow merge",
-    );
-
     // Dir files should have the external change
     assertEqual(
       fs.existsSync(path.join(env.localRepo, env.subdir, "external.ts")),

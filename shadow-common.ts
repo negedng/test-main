@@ -33,6 +33,16 @@ interface ShadowSyncConfig {
 const CONFIG_PATH = process.env.SHADOW_CONFIG ?? path.join(__dirname, "shadow-config.json");
 
 function loadConfig(): ShadowSyncConfig {
+  if (!fs.existsSync(CONFIG_PATH)) {
+    // No config file — return defaults (tests override via applyTestOverrides)
+    return {
+      pairs: [],
+      trailers: { replayed: "Shadow-replayed", seed: "Shadow-seed" },
+      gitConfigOverrides: {},
+      maxBuffer: 50 * 1024 * 1024,
+      shadowBranchPrefix: "shadow",
+    };
+  }
   const raw = fs.readFileSync(CONFIG_PATH, "utf8");
   const doc = JSON.parse(raw) as Record<string, unknown>;
 
@@ -59,7 +69,8 @@ const config = loadConfig();
 export const PAIRS: SyncPair[] = [...config.pairs];
 const REPLAYED_TRAILER = config.trailers.replayed;
 export const SEED_TRAILER = config.trailers.seed;
-export const SHADOW_BRANCH_PREFIX = config.shadowBranchPrefix;
+let _shadowBranchPrefix = config.shadowBranchPrefix;
+export { _shadowBranchPrefix as SHADOW_BRANCH_PREFIX };
 
 // Allow tests to inject config via environment variable.
 if (process.env.SHADOW_TEST_PAIRS) {
@@ -72,7 +83,7 @@ if (process.env.SHADOW_TEST_PAIRS) {
 const MAX_BUFFER = config.maxBuffer;
 
 /** Workspace root — ensures git commands use paths relative to the repo, not the cwd. */
-const REPO_ROOT = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" })
+let _repoRoot = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" })
   .stdout.trim();
 
 /** Git config overrides for cross-OS consistency. */
@@ -80,9 +91,29 @@ const GIT_CONFIG_OVERRIDES = Object.entries(config.gitConfigOverrides).flatMap(
   ([key, value]) => ["-c", `${key}=${value}`],
 );
 
+// ── Test overrides ───────────────────────────────────────────────────────────
+
+export class ShadowSyncError extends Error {
+  constructor(msg: string) { super(msg); this.name = "ShadowSyncError"; }
+}
+
+/**
+ * Override module-level state for in-process testing.
+ * Call before each in-process sync invocation.
+ */
+export function applyTestOverrides(opts: {
+  repoRoot: string;
+  pairs: SyncPair[];
+  shadowBranchPrefix?: string;
+}): void {
+  _repoRoot = opts.repoRoot;
+  PAIRS.length = 0;
+  PAIRS.push(...opts.pairs);
+  if (opts.shadowBranchPrefix != null) _shadowBranchPrefix = opts.shadowBranchPrefix;
+}
+
 export function die(msg: string): never {
-  console.error(`✘ ${msg}`);
-  process.exit(1);
+  throw new ShadowSyncError(`✘ ${msg}`);
 }
 
 /** Validate that a name is safe for use in git commands and path construction. */
@@ -100,13 +131,13 @@ export function git(args: string[], opts?: GitOpts & { safe?: false }): string;
 export function git(args: string[], opts: GitOpts & { safe: true }): GitResult;
 export function git(args: string[], opts?: GitOpts & { safe?: boolean }): string | GitResult {
   const fullArgs = opts?.plain ? args : [...GIT_CONFIG_OVERRIDES, ...args];
+  const trim = (s: string) => opts?.raw ? s : s.trim();
+
   const r = spawnSync("git", fullArgs, {
-    encoding: "utf8", cwd: opts?.cwd ?? REPO_ROOT, maxBuffer: MAX_BUFFER, stdio: ["pipe", "pipe", "pipe"],
+    encoding: "utf8", cwd: opts?.cwd ?? _repoRoot, maxBuffer: MAX_BUFFER, stdio: ["pipe", "pipe", "pipe"],
     ...(opts?.input != null ? { input: opts.input } : {}),
     ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}),
   });
-
-  const trim = (s: string) => opts?.raw ? s : s.trim();
 
   if (opts?.safe) {
     if (r.error) return { stdout: "", stderr: `Failed to spawn git: ${r.error.message}`, status: 1, ok: false };
@@ -141,12 +172,12 @@ export function listBranches(remote: string): string[] {
     .map(l => l.trim())
     .filter(l => l.startsWith(`${remote}/`) && !l.includes("->"))
     .map(l => l.replace(`${remote}/`, ""))
-    .filter(b => !b.startsWith(`${SHADOW_BRANCH_PREFIX}/`));
+    .filter(b => !b.startsWith(`${_shadowBranchPrefix}/`));
 }
 
 /** Build the canonical shadow branch name: shadow/{pairName}/{branch} */
 export function shadowBranchName(pairName: string, branch: string): string {
-  return `${SHADOW_BRANCH_PREFIX}/${pairName}/${branch}`;
+  return `${_shadowBranchPrefix}/${pairName}/${branch}`;
 }
 
 /** Append a trailer to a commit message using `git interpret-trailers`. */

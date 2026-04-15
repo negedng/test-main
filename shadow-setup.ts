@@ -11,12 +11,14 @@
  */
 import { parseArgs } from "util";
 import {
-  PAIRS, SEED_TRAILER,
+  PAIRS, SEED_TRAILER, ShadowSyncError,
   git, refExists, listBranches, ensureRemote,
   getCurrentBranch, appendTrailer,
   validateName, die,
   preflightChecks, handlePreflightResults,
 } from "./shadow-common";
+
+try {
 
 const { values } = parseArgs({
   options: {
@@ -92,3 +94,11 @@ console.log(`✓ Seeded: sync for '${pair.name}' will start after ${tipHash.slic
 console.log();
 console.log("Next steps:");
 console.log(`  1. Run sync:  npm --prefix shadow run sync -- -r ${pair.name} --from ${fromSide}`);
+
+} catch (e) {
+  if (e instanceof ShadowSyncError) {
+    console.error(e.message);
+    process.exit(1);
+  }
+  throw e;
+}

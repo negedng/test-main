@@ -1,7 +1,9 @@
-import { execSync, spawnSync } from "child_process";
+import { execSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { runSync } from "../shadow-sync";
+import { applyTestOverrides, SyncPair } from "../shadow-common";
 
 export interface RemoteInfo {
   remoteName: string;
@@ -79,20 +81,6 @@ export function createTestEnv(name: string, subdir = "frontend", branchPrefix = 
   const extTip = git("rev-parse team/main", localRepo);
   git(`commit --allow-empty -m "Seed shadow-sync for ${subdir}/ from ${remoteName}/main" -m "Shadow-seed: ${subdir} ${extTip}"`, localRepo);
   git("push origin main", localRepo);
-
-  // Copy shadow scripts and config into local repo so they run from there
-  const scriptDir = path.resolve(__dirname, "..");
-  const scripts = [
-    "shadow-common.ts", "shadow-sync.ts",
-  ];
-  for (const f of scripts) {
-    fs.copyFileSync(path.join(scriptDir, f), path.join(localRepo, f));
-  }
-  // Copy config, overriding branchPrefix if non-default
-  const configSrc = path.join(scriptDir, "shadow-config.example.json");
-  const configJson = JSON.parse(fs.readFileSync(configSrc, "utf8"));
-  configJson.shadowBranchPrefix = branchPrefix;
-  fs.writeFileSync(path.join(localRepo, "shadow-config.json"), JSON.stringify(configJson, null, 2));
 
   const primary: RemoteInfo = { remoteName, subdir, remoteBare, remoteWorking };
 
@@ -227,57 +215,32 @@ export interface RunResult {
   stderr: string;
 }
 
-/** Shell-escape a string for use in a command. */
-function shellQuote(s: string): string {
-  return `"${s.replace(/"/g, '\\"')}"`;
+/** Build the SyncPair array for a test env's remotes. */
+function buildPairs(env: TestEnv): SyncPair[] {
+  return env.remotes.map(r => ({
+    name: r.subdir,
+    a: { remote: "origin", dir: r.subdir },
+    b: { remote: r.remoteName, url: r.remoteBare, dir: "" },
+  }));
 }
 
-/** Build env vars — provides remote URLs and config overrides for all scripts. */
-function buildEnv(env: TestEnv): Record<string, string> {
-  const base: Record<string, string> = {
-    ...process.env as Record<string, string>,
-    SHADOW_PUSH_ORIGIN: "origin",
-  };
-  // Always use SHADOW_TEST_PAIRS (JSON format) so the URL is included.
-  base.SHADOW_TEST_PAIRS = JSON.stringify(
-    env.remotes.map(r => ({
-      name: r.subdir,
-      a: { remote: "origin", dir: r.subdir },
-      b: { remote: r.remoteName, url: r.remoteBare, dir: "" },
-    }))
-  );
-  return base;
-}
-
-/** Build env vars for CI sync script. */
-function ciEnv(env: TestEnv): Record<string, string> {
-  return buildEnv(env);
-}
-
-/** Build env vars for local scripts (export). */
-function localEnv(env: TestEnv): Record<string, string> {
-  return buildEnv(env);
-}
-
-/**
- * Run a shadow script in the test env.
- */
-function runScript(env: TestEnv, script: string, args: string[], envVars: Record<string, string>): RunResult {
-  const scriptPath = path.join(env.localRepo, script).replace(/\\/g, "/");
-  const parts = [shellQuote(scriptPath), ...args.map(shellQuote)];
-  const projectDir = path.resolve(__dirname, "..").replace(/\\/g, "/");
-  const cmd = `npx --prefix ${shellQuote(projectDir)} tsx ${parts.join(" ")}`;
-  const result = spawnSync(cmd, {
-    cwd: env.localRepo,
-    env: envVars,
-    encoding: "utf8",
-    shell: true,
-    timeout: 30000,
+/** Apply test overrides and run sync in-process. */
+function runSyncInProcess(env: TestEnv, opts: { from: "a" | "b"; pair?: string }): RunResult {
+  applyTestOverrides({
+    repoRoot: env.localRepo,
+    pairs: buildPairs(env),
+    shadowBranchPrefix: env.branchPrefix,
   });
+
+  const result = runSync({
+    from: opts.from,
+    pair: opts.pair,
+  });
+
   return {
-    status: result.status,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    status: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
   };
 }
 
@@ -287,7 +250,7 @@ function runScript(env: TestEnv, script: string, args: string[], envVars: Record
  * After running, checks out main so the local repo is in a clean state.
  */
 export function runCiSync(env: TestEnv): RunResult {
-  const result = runScript(env, "shadow-sync.ts", ["--from", "b"], ciEnv(env));
+  const result = runSyncInProcess(env, { from: "b" });
   // CI sync switches branches; restore main for subsequent operations
   try { git("checkout main", env.localRepo); } catch { /* may already be on main */ }
   return result;
@@ -300,13 +263,13 @@ export function runCiSync(env: TestEnv): RunResult {
 /** Run shadow-ci-forward.ts — replay local commits to external shadow branch. */
 export function runCiForward(env: TestEnv, remote?: RemoteInfo): RunResult {
   const pairName = remote?.subdir ?? env.subdir;
-  return runScript(env, "shadow-sync.ts", ["--from", "a", "-r", pairName], localEnv(env));
+  return runSyncInProcess(env, { from: "a", pair: pairName });
 }
 
 /** Alias — runExport and runCiForward are now the same operation. */
 export function runExport(env: TestEnv, _message?: string, extraArgs: string[] = [], remote?: RemoteInfo): RunResult {
   const pairName = remote?.subdir ?? env.subdir;
-  return runScript(env, "shadow-sync.ts", ["--from", "a", "-r", pairName, ...extraArgs], localEnv(env));
+  return runSyncInProcess(env, { from: "a", pair: pairName });
 }
 
 /** Alias for runExport. */

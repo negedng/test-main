@@ -139,7 +139,7 @@
     box-shadow: 0 1px 3px rgba(0,0,0,0.04);
   }
   .toc h2 { margin-top: 0; border: none; font-size: 1.2rem; padding-bottom: 0; }
-  .toc ol { margin: 0.5rem 0 0 1.5rem; columns: 2; column-gap: 2rem; }
+  .toc ol { margin: 0.5rem 0 0 1.5rem; }
   .toc li { margin-bottom: 0.2rem; font-size: 0.92rem; }
   .toc a { color: var(--accent); text-decoration: none; }
   .toc a:hover { text-decoration: underline; }
@@ -147,44 +147,33 @@
   .diagram {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1.5rem;
-    text-align: center;
+    border-radius: 10px;
+    padding: 1.5rem 2rem;
+    margin: 1rem 0 1.5rem;
     font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
     font-size: 0.85em;
-    line-height: 1.6;
     white-space: pre;
+    line-height: 1.6;
     overflow-x: auto;
-    margin-bottom: 1rem;
   }
 
-  .callout {
-    border-left: 4px solid var(--accent);
-    background: var(--accent-light);
-    padding: 0.8rem 1rem;
-    border-radius: 0 8px 8px 0;
-    margin-bottom: 1rem;
-    font-size: 0.93rem;
+  .onepager {
+    border: 2px solid var(--accent);
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 2.5rem;
+    background: linear-gradient(135deg, #f0f7ff 0%, var(--card) 100%);
   }
-  .callout-warn {
-    border-left-color: var(--orange);
-    background: #fff7ed;
+  .onepager h2 {
+    margin-top: 0;
+    border: none;
+    font-size: 1.6rem;
+    text-align: center;
+    padding-bottom: 0.5rem;
   }
-  .callout-green {
-    border-left-color: var(--green);
-    background: #dcfce7;
-  }
-
-  .grid-2 {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 1rem;
-  }
-
-  @media (max-width: 700px) {
-    body { padding: 1rem; }
-    .toc ol { columns: 1; }
-    .grid-2 { grid-template-columns: 1fr; }
+  .onepager h3 {
+    color: var(--accent);
+    margin-top: 1.3rem;
   }
 
   .step-num {
@@ -193,1096 +182,544 @@
     justify-content: center;
     width: 1.6rem;
     height: 1.6rem;
+    border-radius: 50%;
     background: var(--accent);
     color: white;
-    border-radius: 50%;
     font-size: 0.8rem;
     font-weight: 700;
     margin-right: 0.5rem;
     flex-shrink: 0;
   }
 
-  .step {
+  .step-list {
+    list-style: none;
+    margin-left: 0;
+    padding-left: 0;
+  }
+  .step-list li {
     display: flex;
     align-items: flex-start;
-    margin-bottom: 0.8rem;
+    margin-bottom: 0.6rem;
   }
-  .step > div { flex: 1; }
+  .step-list li > div { flex: 1; }
 
-  .badge-count {
-    display: inline-block;
-    background: var(--accent);
-    color: white;
-    font-size: 0.75rem;
-    font-weight: 700;
-    padding: 0.1rem 0.5rem;
-    border-radius: 999px;
-    margin-left: 0.4rem;
-    vertical-align: middle;
+  .page-break {
+    border-top: 3px dashed var(--border);
+    margin: 3rem 0;
+    position: relative;
   }
-
-  footer {
-    text-align: center;
-    margin-top: 3rem;
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--border);
+  .page-break::after {
+    content: 'Detailed Reference';
+    position: absolute;
+    top: -0.7rem;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--bg);
+    padding: 0 1rem;
     color: var(--muted);
     font-size: 0.85rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .highlight-box {
+    border-left: 4px solid var(--accent);
+    background: var(--accent-light);
+    padding: 0.8rem 1.2rem;
+    border-radius: 0 8px 8px 0;
+    margin-bottom: 1rem;
+    font-size: 0.93rem;
   }
 </style>
 </head>
 <body>
 
 <h1>Shadow Sync</h1>
-<p>Bi-directional git commit replay with path prefix remapping &mdash; a comprehensive technical reference.</p>
+<p>Technical Reference &mdash; Bi-directional git commit replay with path prefix remapping</p>
 
-<!-- ================================================================ -->
-<!-- TABLE OF CONTENTS                                                -->
-<!-- ================================================================ -->
-<div class="toc">
-  <h2>Table of Contents</h2>
-  <ol>
-    <li><a href="#problem">The Problem</a></li>
-    <li><a href="#architecture">Architecture</a></li>
-    <li><a href="#config">Configuration</a></li>
-    <li><a href="#replay">How Replay Works</a></li>
-    <li><a href="#trailers">Trailers &amp; Deduplication</a></li>
-    <li><a href="#graft">Graft Base (Full-Repo Tree)</a></li>
-    <li><a href="#shadowignore">.shadowignore</a></li>
-    <li><a href="#files">File Reference</a></li>
-    <li><a href="#functions">Key Functions</a></li>
-    <li><a href="#cli">CLI Usage</a></li>
-    <li><a href="#design">Design Decisions</a></li>
-    <li><a href="#tests">Test Suite</a></li>
-    <li><a href="#actions">GitHub Actions</a></li>
-    <li><a href="#pat">PAT Setup</a></li>
-    <li><a href="#git-commands">Git Commands Reference</a></li>
-    <li><a href="#security">Security</a></li>
-  </ol>
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<!-- ONE-PAGER                                                              -->
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+
+<div class="onepager">
+<h2>One-Pager Overview</h2>
+
+<h3>Purpose</h3>
+<p>
+  Shadow Sync keeps two git repositories in sync when one contains a subdirectory that mirrors the root
+  of the other. Commits are replayed individually &mdash; preserving authorship, timestamps, branch structure,
+  and merge topology &mdash; while adding or stripping the path prefix as needed.
+</p>
+<p>
+  Each side receives a <code>shadow/</code> branch that the team merges into their main branch when ready.
+  This gives both teams full control over when changes land, without force-pushes or rewritten history.
+</p>
+
+<h3>How the repos are related</h3>
+<div class="diagram">RepoA  (monorepo)                          RepoB  (standalone)
+ backend/src/app.ts  &lt;&mdash;&mdash; sync &mdash;&mdash;&gt;   src/app.ts
+ backend/README.md   &lt;&mdash;&mdash; sync &mdash;&mdash;&gt;   README.md
+ frontend/...        (not synced)
+ infra/...           (not synced)</div>
+<p>
+  <strong>RepoA</strong> and <strong>RepoB</strong> are symmetric endpoints. Which one is "source" and which is "target" depends
+  on the direction flag at runtime (<code>--from a</code> or <code>--from b</code>). The <code>dir</code> field in the config defines the
+  path prefix for each side (<code>"backend"</code> vs <code>""</code> for root).
+</p>
+<p>
+  The tool runs from a <strong>workspace</strong> &mdash; either one of the repos themselves (the other is added as a remote)
+  or a standalone orchestrator repo (both are added as remotes).
+</p>
+
+<h3>Commands</h3>
+<table>
+  <tr><th>Command</th><th>What it does</th></tr>
+  <tr>
+    <td><code>npm run setup -- -r backend --from a</code></td>
+    <td><strong>Bootstrap.</strong> Records a seed baseline so sync knows where shared history starts. Run once per pair.</td>
+  </tr>
+  <tr>
+    <td><code>npm run sync -- --from b</code></td>
+    <td><strong>Pull.</strong> Replay RepoB's new commits into <code>shadow/</code> branches on RepoA. The <code>backend/</code> prefix is added.</td>
+  </tr>
+  <tr>
+    <td><code>npm run sync -- --from a</code></td>
+    <td><strong>Push.</strong> Replay RepoA's new commits into <code>shadow/</code> branches on RepoB. The <code>backend/</code> prefix is stripped.</td>
+  </tr>
+  <tr>
+    <td><code>git merge origin/shadow/backend/main</code></td>
+    <td><strong>Land.</strong> After syncing, merge the shadow branch into your main branch. Normal git merge.</td>
+  </tr>
+  <tr>
+    <td><code>npm test</code></td>
+    <td>Run all 39 automated tests (pull, push, merge, branching, edge cases).</td>
+  </tr>
+</table>
+
+<table>
+  <tr><th>Flag</th><th>Description</th><th>Default</th></tr>
+  <tr><td><code>--from {a|b}</code></td><td>Direction: which side's commits to replay</td><td><code>b</code></td></tr>
+  <tr><td><code>-r / --pair</code></td><td>Target a specific pair by name</td><td>All pairs</td></tr>
+  <tr><td><code>-b / --branch</code></td><td>Sync only this branch</td><td>All branches</td></tr>
+</table>
+
 </div>
 
-<!-- ================================================================ -->
-<!-- 1. THE PROBLEM                                                   -->
-<!-- ================================================================ -->
-<h2 id="problem">1. The Problem</h2>
+<!-- ════════════════════════════════════════════════════════════════════════ -->
+<!-- DETAILED REFERENCE                                                     -->
+<!-- ════════════════════════════════════════════════════════════════════════ -->
 
-<div class="card">
-  <h3><span class="tag tag-red">Challenge</span> Two repos, one codebase subset</h3>
-  <p>
-    A common pattern in organizations: <strong>RepoA</strong> is a monorepo with many directories, one of which
-    is <code>backend/</code>. <strong>RepoB</strong> is a standalone repository containing just the backend code
-    at its root. Both repos are actively developed. Changes made in one need to appear in the other, with the
-    path prefix (<code>backend/</code>) added or stripped accordingly.
-  </p>
-  <p>
-    Manual cherry-picking breaks down quickly. Subtree merges lose authorship. Git submodules add friction and
-    cannot remap paths. What is needed is an automated, bi-directional sync that:
-  </p>
-  <ul>
-    <li>Replays commits per-commit (preserving <code>git blame</code> and authorship)</li>
-    <li>Adds or strips the path prefix as needed</li>
-    <li>Preserves merge topology and branch structure</li>
-    <li>Prevents infinite round-trip duplication</li>
-    <li>Works from either repo or from a standalone orchestrator</li>
-  </ul>
-</div>
+<div class="page-break"></div>
 
-<div class="card" style="overflow-x:auto">
-  <table style="margin:0 auto;border-collapse:separate;border-spacing:0.8rem;text-align:left">
-    <tr>
-      <td style="background:var(--accent-light);padding:1rem 1.5rem;border-radius:8px;vertical-align:top">
-        <strong>RepoA</strong> (monorepo)<br><br>
-        <code>docs/</code><br>
-        <code>frontend/</code><br>
-        <code style="color:var(--accent);font-weight:bold">backend/</code><br>
-        <code>&nbsp;&nbsp;src/</code><br>
-        <code>&nbsp;&nbsp;package.json</code><br>
-        <code>&nbsp;&nbsp;tsconfig.json</code>
-      </td>
-      <td style="text-align:center;vertical-align:middle;padding:0 1rem;font-size:1.5rem">
-        &xlarr;&xrarr;<br>
-        <small style="font-size:0.7rem;color:var(--muted)">Shadow Sync</small>
-      </td>
-      <td style="background:#dcfce7;padding:1rem 1.5rem;border-radius:8px;vertical-align:top">
-        <strong>RepoB</strong> (standalone)<br><br>
-        <code style="color:var(--green);font-weight:bold">src/</code><br>
-        <code style="color:var(--green);font-weight:bold">package.json</code><br>
-        <code style="color:var(--green);font-weight:bold">tsconfig.json</code><br>
-        <code>tests/</code><br>
-        <code>README.md</code>
-      </td>
-    </tr>
-    <tr>
-      <td style="text-align:center;color:var(--muted);font-size:0.85rem" colspan="3">
-        <code>backend/src/app.ts</code> in RepoA &harr; <code>src/app.ts</code> in RepoB
-      </td>
-    </tr>
-  </table>
-</div>
+<nav class="toc">
+<h2>Table of Contents</h2>
+<ol>
+  <li><a href="#config">Configuration</a></li>
+  <li><a href="#seed">Seed &amp; Bootstrap</a></li>
+  <li><a href="#sync-steps">Steps of a Sync</a></li>
+  <li><a href="#diff">How the Diff Works</a></li>
+  <li><a href="#tree">How the Tree Is Built</a></li>
+  <li><a href="#merge">How Merges Work</a></li>
+  <li><a href="#dedup">Deduplication &amp; Round-Trip Prevention</a></li>
+  <li><a href="#shadowignore">.shadowignore</a></li>
+  <li><a href="#preflight">Preflight Checks</a></li>
+  <li><a href="#files">File Reference</a></li>
+</ol>
+</nav>
 
-<!-- ================================================================ -->
-<!-- 2. ARCHITECTURE                                                  -->
-<!-- ================================================================ -->
-<h2 id="architecture">2. Architecture</h2>
+<!-- ── 1. Configuration ────────────────────────────────────────────────── -->
 
-<div class="card">
-  <h3><span class="tag tag-blue">Core</span> One script, two directions</h3>
-  <p>
-    Shadow Sync is a single script (<code>shadow-sync.ts</code>) driven by a <code>--from</code> flag that
-    sets the direction. The shared replay engine in <code>shadow-common.ts</code> handles both directions
-    with identical logic.
-  </p>
-  <pre><code># Pull: replay RepoB's commits into shadow branches on RepoA
-shadow-sync --from b
+<h2 id="config">1. Configuration</h2>
 
-# Push: replay RepoA's commits into shadow branches on RepoB
-shadow-sync --from a</code></pre>
-  <p>
-    Shadow branches are created under a configurable prefix. The default naming convention is
-    <code>shadow/{pairName}/{branch}</code>, for example <code>shadow/backend/main</code>.
-  </p>
-</div>
+<p>
+  A <code>shadow-config.json</code> file defines one or more <strong>pairs</strong>. Each pair connects
+  two repo endpoints (<code>a</code> and <code>b</code>) with a stable name used in trailers and branch names.
+</p>
 
-<div>
-  <div class="card">
-    <h3><span class="tag tag-green">Mode</span> Workspace mode</h3>
-    <p>
-      The tool runs from inside one of the two repos. That repo is "origin" (no URL needed in config).
-      The other repo is added as a remote. This is the typical setup for a developer or CI environment.
-    </p>
-    <pre><code>RepoA (your workspace)              RepoB (remote)
-├── backend/                         ├── src/app.ts
-│   └── src/app.ts                   └── README.md
-├── frontend/
-├── shadow-sync.ts     &larr; installed via npm
-├── shadow-common.ts
-└── shadow-config.json
-        a: { remote: "origin", dir: "backend" }      &larr; no url, it's the workspace
-        b: { remote: "repo-b", url: "...", dir: "" }  &larr; url needed, it's a remote</code></pre>
-  </div>
-  <div class="card">
-    <h3><span class="tag tag-purple">Mode</span> Orchestrator mode</h3>
-    <p>
-      The tool runs from a separate, standalone git repository. Both endpoints have URLs configured.
-      Neither repo is the "home" repo &mdash; the orchestrator is a neutral third party.
-    </p>
-    <pre><code>Orchestrator (standalone)            RepoA (remote)         RepoB (remote)
-├── shadow-sync.ts                   ├── backend/           ├── src/app.ts
-├── shadow-common.ts                 │   └── src/app.ts     └── README.md
-├── shadow-config.json               └── frontend/
-└── package.json
-    a: { remote: "repo-a", url: "...", dir: "backend" }   &larr; both have urls
-    b: { remote: "repo-b", url: "...", dir: "" }</code></pre>
-  </div>
-</div>
-
-<div class="card" style="overflow-x:auto">
-  <h3 style="text-align:center;margin-bottom:1rem"><code>shadow-sync --from b</code> &mdash; replay RepoB &rarr; RepoA</h3>
-  <table style="margin:0 auto;border-collapse:separate;border-spacing:0.5rem;text-align:center">
-    <tr>
-      <td style="background:var(--accent-light);padding:0.8rem 1.2rem;border-radius:8px"><strong>RepoB</strong><br><code>main</code>, <code>feature/x</code></td>
-      <td style="padding:0 1rem">&xrarr;<br><small>fetch</small></td>
-      <td style="background:#ede9fe;padding:0.8rem 1.2rem;border-radius:8px"><strong>Replay engine</strong><br>per-commit, topo order<br><small>strip <code>b.dir</code> &rarr; add <code>a.dir</code></small><br><small>+ <code>Shadow-replayed: {b.remote}</code> trailer</small></td>
-      <td style="padding:0 1rem">&xrarr;<br><small>push</small></td>
-      <td style="background:#dcfce7;padding:0.8rem 1.2rem;border-radius:8px"><strong>RepoA</strong><br><code>shadow/backend/main</code><br><code>shadow/backend/feature/x</code></td>
-    </tr>
-  </table>
-  <p style="text-align:center;margin-top:1rem;color:var(--muted)">Then on RepoA: <code>git merge origin/shadow/backend/main</code></p>
-</div>
-
-<div class="card" style="overflow-x:auto">
-  <h3 style="text-align:center;margin-bottom:1rem"><code>shadow-sync --from a</code> &mdash; replay RepoA &rarr; RepoB</h3>
-  <table style="margin:0 auto;border-collapse:separate;border-spacing:0.5rem;text-align:center">
-    <tr>
-      <td style="background:#dcfce7;padding:0.8rem 1.2rem;border-radius:8px"><strong>RepoA</strong><br><code>main</code> (commits touching <code>backend/</code>)</td>
-      <td style="padding:0 1rem">&xrarr;<br><small>fetch</small></td>
-      <td style="background:#ede9fe;padding:0.8rem 1.2rem;border-radius:8px"><strong>Replay engine</strong><br>per-commit, topo order<br><small>strip <code>a.dir</code> &rarr; add <code>b.dir</code></small><br><small>+ <code>Shadow-replayed: {a.remote}</code> trailer</small></td>
-      <td style="padding:0 1rem">&xrarr;<br><small>push</small></td>
-      <td style="background:var(--accent-light);padding:0.8rem 1.2rem;border-radius:8px"><strong>RepoB</strong><br><code>shadow/backend/main</code></td>
-    </tr>
-  </table>
-  <p style="text-align:center;margin-top:1rem;color:var(--muted)">Then on RepoB: <code>git merge origin/shadow/backend/main</code></p>
-</div>
-
-<!-- ================================================================ -->
-<!-- 3. CONFIGURATION                                                 -->
-<!-- ================================================================ -->
-<h2 id="config">3. Configuration</h2>
-
-<div class="card">
-  <h3><span class="tag tag-blue">File</span> shadow-config.json</h3>
-  <pre><code>{
-  "pairs": [
-    {
-      "name": "backend",
-      "a": {
-        "remote": "repo-a",
-        "url": "https://github.com/org/repo-a.git",
-        "dir": "backend"
-      },
-      "b": {
-        "remote": "repo-b",
-        "url": "https://github.com/org/repo-b.git",
-        "dir": ""
-      }
-    }
-  ],
-  "trailers": {
-    "replayed": "Shadow-replayed",
-    "seed": "Shadow-seed",
-  },
-  "gitConfigOverrides": {
-    "core.autocrlf": "false"
-  },
-  "maxBuffer": 52428800,
-  "shadowBranchPrefix": "shadow"
+<pre><code>{
+  "pairs": [{
+    "name": "backend",
+    "a": { "remote": "origin",       "dir": "backend" },
+    "b": { "remote": "backend-repo", "url": "https://github.com/org/backend.git", "dir": "" }
+  }],
+  "shadowBranchPrefix": "shadow",
+  "trailers": { "replayed": "Shadow-replayed", "seed": "Shadow-seed" },
+  "gitConfigOverrides": { "diff.renameLimit": "10000" },
+  "maxBuffer": 52428800
 }</code></pre>
-</div>
 
 <div class="card">
-  <h3>Configuration fields</h3>
-  <table>
-    <tr><th>Field</th><th>Description</th></tr>
-    <tr><td><code>pairs</code></td><td>Array of sync pair definitions. Each pair defines two endpoints (<code>a</code> and <code>b</code>) that are completely symmetric.</td></tr>
-    <tr><td><code>pairs[].name</code></td><td>Unique identifier for the pair. Used in shadow branch names and seed trailers.</td></tr>
-    <tr><td><code>pairs[].a.remote</code></td><td>Git remote name for endpoint A (e.g. <code>"origin"</code>, <code>"repo-a"</code>).</td></tr>
-    <tr><td><code>pairs[].a.url</code></td><td>Git URL for the remote. Optional &mdash; omit if the remote already exists (e.g. <code>"origin"</code>).</td></tr>
-    <tr><td><code>pairs[].a.dir</code></td><td>Path prefix in this repo. <code>"backend"</code> means files live under <code>backend/</code>. Empty string <code>""</code> means files are at the repo root.</td></tr>
-    
-    <tr><td><code>trailers</code></td><td>Customizable trailer names for sync, seed, forward, and export markers.</td></tr>
-    <tr><td><code>gitConfigOverrides</code></td><td>Git config key/value pairs applied via <code>-c</code> flags on every git command for cross-platform consistency.</td></tr>
-    <tr><td><code>maxBuffer</code></td><td>Maximum buffer size in bytes for git command output (default: 50 MB).</td></tr>
-    <tr><td><code>shadowBranchPrefix</code></td><td>Prefix for shadow branch names (default: <code>"shadow"</code>).</td></tr>
-  </table>
+<h3>Key fields</h3>
+<table>
+  <tr><th>Field</th><th>Purpose</th></tr>
+  <tr><td><code>name</code></td><td>Pair identifier. Used in shadow branch names (<code>shadow/backend/main</code>) and trailers.</td></tr>
+  <tr><td><code>remote</code></td><td>Git remote name. Use <code>"origin"</code> if the tool runs inside that repo.</td></tr>
+  <tr><td><code>url</code></td><td>Remote URL. Omit if the remote already exists (e.g. <code>origin</code>).</td></tr>
+  <tr><td><code>dir</code></td><td>Path prefix in that repo. <code>"backend"</code> means files live under <code>backend/</code>. <code>""</code> means root.</td></tr>
+</table>
 </div>
 
-<!-- ================================================================ -->
-<!-- 4. HOW REPLAY WORKS                                              -->
-<!-- ================================================================ -->
-<h2 id="replay">4. How Replay Works</h2>
+<!-- ── 2. Seed & Bootstrap ─────────────────────────────────────────────── -->
+
+<h2 id="seed">2. Seed &amp; Bootstrap</h2>
+
+<p>
+  Before the first sync, you must record a <strong>seed</strong>. The seed is a marker commit that tells
+  the replay engine where history begins &mdash; everything before it is skipped.
+</p>
+
+<pre><code>npm run setup -- -r backend --from a</code></pre>
+
+<p>This creates an empty commit with a trailer:</p>
+<pre><code>Shadow-seed: backend 3fcc1ed...</code></pre>
+
+<p>
+  The trailer records the pair name and the tip hash of the source branch at that moment.
+  During replay, <code>findSeed()</code> scans the log for this trailer and uses it as a boundary in
+  <code>git rev-list</code> to exclude ancestor commits.
+</p>
+
+<div class="highlight-box">
+  The seed also anchors parent mapping: when the first replayed commit's parents predate the seed,
+  the engine maps them to the seed commit itself, giving the shadow branch shared ancestry with the
+  target's main branch &mdash; essential for clean <code>git merge</code>.
+</div>
+
+<!-- ── 3. Steps of a Sync ──────────────────────────────────────────────── -->
+
+<h2 id="sync-steps">3. Steps of a Sync</h2>
+
+<p>
+  A single invocation of <code>shadow-sync.ts</code> runs through these steps. The same code handles both
+  directions &mdash; "pull" (<code>--from b</code>) and "push" (<code>--from a</code>) &mdash; by swapping which endpoint
+  is source vs target.
+</p>
+
+<ol class="step-list">
+  <li><span class="step-num">1</span><div>
+    <strong>Resolve direction.</strong> Parse <code>--from</code>, determine source and target endpoints.
+    Validate names (no <code>..</code>, leading <code>-</code>, or absolute paths &mdash; prevents injection).
+    Ensure both remotes exist (add/update URL if configured).
+  </div></li>
+  <li><span class="step-num">2</span><div>
+    <strong>Fetch from source.</strong> <code>git fetch {source.remote}</code> to get the latest refs.
+  </div></li>
+  <li><span class="step-num">3</span><div>
+    <strong>Determine branches.</strong>
+    If <code>--branch</code> is given: sync only that branch.
+    If source is the workspace (no URL): use current branch.
+    If source is a remote: list all its branches (excluding <code>shadow/</code> branches).
+  </div></li>
+  <li><span class="step-num">4</span><div>
+    <strong>Preflight checks.</strong> For each branch, scan the source ref for:
+    shallow clones (error), submodules (warn), symlinks (warn), case conflicts (error), LFS pointers (warn).
+    Branches that fail are skipped.
+  </div></li>
+  <li><span class="step-num">5</span><div>
+    <strong>Replay commits.</strong> The core engine (<code>replayCommits()</code> in <code>shadow-common.ts</code>)
+    processes all branches in a single pass. Details in the sections below.
+  </div></li>
+  <li><span class="step-num">6</span><div>
+    <strong>Push shadow branches.</strong> For each branch, push the final replayed SHA to the
+    target remote as <code>shadow/{pairName}/{branch}</code>. If the shadow branch has diverged
+    (both sides have new commits), a merge commit is created to reconcile. See <a href="#merge">Merges</a>.
+  </div></li>
+  <li><span class="step-num">7</span><div>
+    <strong>Report stale branches.</strong> If syncing all branches, warn about shadow branches whose
+    source branch no longer exists. Print the <code>git push --delete</code> command for manual cleanup.
+  </div></li>
+</ol>
+
+<!-- ── 4. How the Diff Works ───────────────────────────────────────────── -->
+
+<h2 id="diff">4. How the Diff Works</h2>
+
+<p>
+  The replay engine is <strong>diff-based</strong>, not snapshot-based. For each source commit, only the files
+  that changed are extracted and applied to the previous replayed tree. This produces clean, minimal diffs
+  in the replayed history &mdash; if one file changed in the source commit, only one file appears in the
+  replayed commit's diff.
+</p>
 
 <div class="card">
-  <h3><span class="tag tag-blue">Engine</span> Unified replay: <code>replayCommits()</code></h3>
-  <p>
-    The core function <code>replayCommits({ pair, from: "a"|"b", branches })</code> drives both directions
-    with a single code path. The direction flag selects which endpoint is the source and which is the target,
-    and which trailers to add versus skip.
-  </p>
+<h3>Computing the diff</h3>
+<p>For a <strong>normal commit</strong> (has a parent):</p>
+<pre><code>git diff-tree -r {parent} {commit} -- {sourceDir}/</code></pre>
+<p>
+  This lists every file that changed between the commit and its first parent, scoped to the source
+  directory. Output format: <code>:oldmode newmode oldhash newhash status\tpath</code>
+</p>
+
+<p>For a <strong>root commit</strong> (no parent):</p>
+<pre><code>git ls-tree -r {commit} -- {sourceDir}/</code></pre>
+<p>
+  All files are treated as additions. The output is converted to diff-tree format with status <code>A</code>.
+</p>
 </div>
+
+<p>Supported status codes:</p>
+<table>
+  <tr><th>Status</th><th>Meaning</th><th>Action</th></tr>
+  <tr><td><code>A</code></td><td>Added</td><td><code>git update-index --add --cacheinfo {mode},{hash},{path}</code></td></tr>
+  <tr><td><code>M</code></td><td>Modified</td><td><code>git update-index --add --cacheinfo {mode},{hash},{path}</code></td></tr>
+  <tr><td><code>D</code></td><td>Deleted</td><td><code>git rm --cached -f {path}</code></td></tr>
+  <tr><td><code>R</code></td><td>Renamed</td><td><code>git rm</code> old path + <code>update-index</code> new path</td></tr>
+  <tr><td><code>C</code></td><td>Copied</td><td><code>update-index</code> new path (old stays)</td></tr>
+</table>
+
+<!-- ── 5. How the Tree Is Built ────────────────────────────────────────── -->
+
+<h2 id="tree">5. How the Tree Is Built</h2>
+
+<p>
+  The function <code>buildRemappedTree()</code> constructs a new git tree object for each replayed commit.
+  It uses a temporary index file to assemble the tree without touching the working directory.
+</p>
+
+<ol class="step-list">
+  <li><span class="step-num">1</span><div>
+    <strong>Load base tree into temp index.</strong>
+    If this commit has a mapped parent: <code>git read-tree {parentTree}</code> loads the parent's full tree.
+    If this is the first commit: <code>git read-tree --empty</code> starts fresh.
+    <br><br>
+    The base tree is the <em>first mapped parent's tree</em>, which is a full repo tree from the target side.
+    This is critical: it means the replayed commit contains <em>all</em> files in the target repo, not just the
+    synced subdirectory. Without this, <code>git merge</code> would see every file outside the synced directory
+    as deleted.
+  </div></li>
+  <li><span class="step-num">2</span><div>
+    <strong>Compute the diff</strong> as described in <a href="#diff">section 4</a>.
+  </div></li>
+  <li><span class="step-num">3</span><div>
+    <strong>Remap paths and apply changes.</strong> For each changed file:
+    <ul>
+      <li><strong>Strip source prefix:</strong> remove <code>{sourceDir}/</code> from the path (e.g. <code>backend/src/app.ts</code> &rarr; <code>src/app.ts</code>)</li>
+      <li><strong>Check .shadowignore:</strong> skip files matching any ignore pattern</li>
+      <li><strong>Add target prefix:</strong> prepend <code>{targetDir}/</code> to the path (e.g. <code>src/app.ts</code> &rarr; <code>backend/src/app.ts</code> or just <code>src/app.ts</code> if target dir is root)</li>
+      <li><strong>Update the temp index:</strong> add, modify, delete, or rename using low-level git commands</li>
+    </ul>
+  </div></li>
+  <li><span class="step-num">4</span><div>
+    <strong>Write the tree.</strong> <code>git write-tree</code> creates a tree object from the temp index.
+    This tree hash is used as the tree for the replayed commit.
+  </div></li>
+</ol>
+
+<div class="diagram">Source commit (RepoB, dir=""):        Replayed commit (RepoA, dir="backend"):
+
+  diff: M src/app.ts                    base tree: full RepoA tree (from parent)
+        A src/new.ts                    apply: M backend/src/app.ts
+        D old-file.txt                         A backend/src/new.ts
+                                               D backend/old-file.txt
+                                        result: full RepoA tree with 3 files changed</div>
+
+<!-- ── 6. How Merges Work ──────────────────────────────────────────────── -->
+
+<h2 id="merge">6. How Merges Work</h2>
+
+<p>Merging happens at three levels in the system:</p>
+
+<h3>6a. Merge topology preservation (during replay)</h3>
+<p>
+  When the source history contains merge commits, the replay engine preserves their topology.
+  The function <code>resolveParents()</code> maps each source parent hash to its replayed equivalent
+  using the SHA mapping table. The replayed merge commit is created with all mapped parents:
+</p>
+<pre><code>git commit-tree {tree} -p {parent1} -p {parent2} -m {message}</code></pre>
+<p>
+  Because all branches are processed in a single pass (topological order), a commit that is
+  reachable from multiple branches is replayed once and reused &mdash; preserving shared ancestry.
+</p>
+
+<h3>6b. Shadow branch reconciliation (during push)</h3>
+<p>
+  After replay, the tool pushes the result to <code>shadow/{pair}/{branch}</code> on the target remote.
+  Three cases:
+</p>
 
 <div class="card">
-  <h3>Replay steps (per commit)</h3>
-
-  <div class="step">
-    <span class="step-num">1</span>
-    <div>
-      <strong>Read source tree.</strong> If the source endpoint has a non-empty <code>dir</code> (e.g. <code>"backend"</code>),
-      use <code>git rev-parse commit:backend</code> to extract just that subtree. If <code>dir</code> is empty,
-      use the full tree of the commit.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">2</span>
-    <div>
-      <strong>Place under target prefix.</strong> If the target endpoint has a non-empty <code>dir</code>,
-      use <code>git read-tree --prefix=backend/</code> to nest the tree under the target directory. If <code>dir</code>
-      is empty, use the tree as-is.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">3</span>
-    <div>
-      <strong>Overlay onto graft base.</strong> If the target has a <code>dir</code> prefix, overlay the remapped
-      subtree onto a base tree containing the full repo. This ensures shadow commits carry the complete repo tree
-      so <code>git merge</code> does not delete files outside the synced directory.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">4</span>
-    <div>
-      <strong>Apply .shadowignore.</strong> If the source commit contains a <code>.shadowignore</code> file,
-      remove matching files from the temporary index before writing the tree.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">5</span>
-    <div>
-      <strong>Write tree and commit.</strong> Run <code>git write-tree</code> to finalize the tree object,
-      then <code>git commit-tree</code> with the original author name, email, date, committer name, email, date,
-      and the commit message with the appropriate direction-specific trailer appended.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">6</span>
-    <div>
-      <strong>Record SHA mapping.</strong> Store source SHA &rarr; replayed SHA so that parent resolution and
-      deduplication work correctly for subsequent commits in the same batch.
-    </div>
-  </div>
+<table>
+  <tr><th>Case</th><th>Condition</th><th>Action</th></tr>
+  <tr>
+    <td><span class="tag tag-green">Fast-forward</span></td>
+    <td>Current shadow branch tip is an ancestor of the replayed SHA</td>
+    <td>Push directly. The shadow branch moves forward.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-blue">Up to date</span></td>
+    <td>Replayed SHA is an ancestor of the current tip (target is ahead)</td>
+    <td>Skip. Nothing to push.</td>
+  </tr>
+  <tr>
+    <td><span class="tag tag-orange">Diverged</span></td>
+    <td>Neither is an ancestor of the other</td>
+    <td>Create a merge commit using <code>commit-tree</code> with both as parents.
+        The replayed tree wins (ours strategy). Push the merge.</td>
+  </tr>
+</table>
 </div>
+
+<p>The diverged case happens when both sides make changes between syncs. The reconciliation merge:</p>
+<pre><code>// Get the replayed tree (this is the "truth" from the source)
+syncedTree = git rev-parse {replayedSHA}^{tree}
+
+// Create merge commit with both parents but the replayed tree
+pushSHA = git commit-tree {syncedTree} -p {currentSHA} -p {replayedSHA}
+    -m "Merge replayed commits into shadow/backend/main"</code></pre>
+<p>
+  This preserves both histories as parents but resolves the content to match the source.
+</p>
+
+<h3>6c. User-facing merge (after sync)</h3>
+<p>
+  After the tool pushes shadow branches, the target team merges them into their main branch
+  using standard git:
+</p>
+<pre><code>git fetch origin
+git merge origin/shadow/backend/main</code></pre>
+<p>
+  Because shadow commits carry the full repo tree (not just the synced subdirectory), git's
+  three-way merge works correctly &mdash; files outside the synced directory are untouched, and
+  only actual conflicts require manual resolution.
+</p>
+
+<!-- ── 7. Deduplication ────────────────────────────────────────────────── -->
+
+<h2 id="dedup">7. Deduplication &amp; Round-Trip Prevention</h2>
+
+<p>
+  In a bidirectional system, replayed commits would bounce back and forth forever without
+  deduplication. Shadow Sync solves this with <strong>git trailers</strong> &mdash; metadata lines
+  appended to commit messages.
+</p>
 
 <div class="card">
-  <h3><span class="tag tag-green">Function</span> <code>buildRemappedTree()</code></h3>
-  <p>
-    A unified tree builder used by both directions. It handles:
-  </p>
-  <ul>
-    <li>Extracting a subdirectory tree from a commit (<code>git rev-parse {hash}:{dir}</code>)</li>
-    <li>Adding a prefix to a tree (<code>git read-tree --prefix={dir}/</code>)</li>
-    <li>Overlaying onto a base tree (read base tree first, then overlay the remapped content)</li>
-    <li>Applying <code>.shadowignore</code> by removing matched paths from the temp index</li>
-    <li>Producing a final tree hash via <code>git write-tree</code></li>
-  </ul>
+<h3>Trailer format</h3>
+<pre><code>Shadow-replayed (repo-b): 3fcc1ed4a...</code></pre>
+<p>
+  Every replayed commit gets a trailer recording the source remote name and the original commit hash.
+</p>
 </div>
 
-<div class="card">
-  <h3>Topology preservation</h3>
-  <p>
-    All branches are processed in a single topological pass. When a commit is an ancestor shared by multiple
-    branches, it is replayed once and reused via the SHA mapping. Merge commits have their parents mapped
-    through the same mapping table, preserving the original branch and merge topology.
-  </p>
-  <p>
-    The function <code>resolveParents(commit, shaMapping, graftBase)</code> handles parent mapping. If a parent
-    has not been replayed (e.g. it predates the seed), the graft base is used as a fallback parent.
-  </p>
-</div>
-
-<!-- ================================================================ -->
-<!-- 5. TRAILERS & DEDUPLICATION                                      -->
-<!-- ================================================================ -->
-<h2 id="trailers">5. Trailers &amp; Deduplication</h2>
-
-<div class="card">
-  <h3><span class="tag tag-orange">Critical</span> Preventing round-trip duplication</h3>
-  <p>
-    Without safeguards, syncing A&rarr;B&rarr;A would create infinite duplicates. Shadow Sync uses
-    git commit trailers (footer lines in the commit message) as the deduplication mechanism.
-    Two complementary trailer types work together:
-  </p>
-</div>
-
-<div class="grid-2">
-  <div class="card">
-    <h3><span class="tag tag-blue">B &rarr; A</span> Shadow-replayed: {b.remote}</h3>
-    <p>
-      Added to every commit replayed from B into A. Records the original commit hash from RepoB.
-    </p>
-    <pre><code>Shadow-replayed: repo-b a1b2c3d</code></pre>
-    <p>
-      When syncing A&rarr;B, any commit carrying this trailer is <strong>skipped</strong> &mdash; it
-      originated in B and should not be sent back.
-    </p>
-  </div>
-  <div class="card">
-    <h3><span class="tag tag-purple">A &rarr; B</span> Shadow-replayed: {a.remote}</h3>
-    <p>
-      Added to every commit replayed from A into B. Records the original commit hash from RepoA.
-    </p>
-    <pre><code>Shadow-replayed: repo-a e4f5g6h</code></pre>
-    <p>
-      When syncing B&rarr;A, any commit carrying this trailer is <strong>skipped</strong> &mdash; it
-      originated in A and should not be sent back.
-    </p>
-  </div>
-</div>
-
-<div class="card">
-  <h3>Direction config (inside <code>replayCommits</code>)</h3>
-  <table>
-    <tr><th>Direction</th><th>addTrailer</th><th>skipTrailer</th></tr>
-    <tr><td>A &rarr; B (<code>--from a</code>)</td><td><code>Shadow-replayed: {a.remote}</code></td><td><code>Shadow-replayed: {b.remote}</code></td></tr>
-    <tr><td>B &rarr; A (<code>--from b</code>)</td><td><code>Shadow-replayed: {b.remote}</code></td><td><code>Shadow-replayed: {a.remote}</code></td></tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-green">Seed</span> Shadow-seed trailer</h3>
-  <p>
-    When <code>shadow-setup.ts</code> bootstraps the sync, it creates a seed commit with the trailer:
-  </p>
-  <pre><code>Shadow-seed: backend a1b2c3d</code></pre>
-  <p>
-    This records the starting point. During replay, all commits before the seed boundary are skipped.
-    The seed hash is found by <code>findSeedHash(pairName)</code>, and the workspace commit that recorded
-    the seed is found by <code>findSeedCommit(pairName)</code>.
-  </p>
-</div>
-
-<div class="card">
-  
-  <p>
-    Used in CI workflows. The <code>shadow-forward.yml</code> workflow only processes pushes to shadow branches
-    Both directions run on independent cron schedules. This prevents cascade loops where
-    triggering on every shadow branch update and limits it to intentional exports.
-  </p>
-</div>
-
-<!-- ================================================================ -->
-<!-- 6. GRAFT BASE                                                    -->
-<!-- ================================================================ -->
-<h2 id="graft">6. Graft Base (Full-Repo Tree)</h2>
-
-<div class="card">
-  <h3><span class="tag tag-red">Important</span> Why shadow commits need the full tree</h3>
-  <p>
-    When the target endpoint has a non-empty <code>dir</code> (e.g. <code>backend/</code>), shadow branches
-    will contain commits that only have content under <code>backend/</code>. If you merge such a branch into
-    the target repo's main branch, git sees all files outside <code>backend/</code> as deleted and removes them.
-  </p>
-  <p>
-    The graft base solves this: each shadow commit is built on top of a base tree that contains the full repo.
-    The synced subtree is overlaid onto this base, producing a complete tree. This way, <code>git merge</code>
-    works correctly because both sides have the same set of top-level directories.
-  </p>
-</div>
-
-<div class="card">
-  <h3>How the graft base is selected</h3>
-  <table>
-    <tr><th>Scenario</th><th>Graft base source</th></tr>
-    <tr>
-      <td>Workspace is the target repo</td>
-      <td>The seed commit (the workspace commit where <code>Shadow-seed:</code> was recorded)</td>
-    </tr>
-    <tr>
-      <td>Running from an orchestrator</td>
-      <td>The target repo's main branch tip</td>
-    </tr>
-    <tr>
-      <td>Target <code>dir</code> is <code>""</code> (root)</td>
-      <td>No graft base needed &mdash; the synced content IS the entire tree</td>
-    </tr>
-  </table>
-</div>
-
-<!-- ================================================================ -->
-<!-- 7. .SHADOWIGNORE                                                 -->
-<!-- ================================================================ -->
-<h2 id="shadowignore">7. .shadowignore</h2>
-
-<div class="card">
-  <h3><span class="tag tag-purple">Filter</span> Per-endpoint file exclusion</h3>
-  <p>
-    Works like <code>.gitignore</code> — commit a <code>.shadowignore</code> file in your repo and it is automatically discovered from the source commit's tree during replay. This file contains glob patterns (one per line) for files that this endpoint should <strong>not send</strong> to the
-    other side.
-  </p>
-  <pre><code># .shadowignore example
-# CI configs specific to this repo
-.github/
-.gitlab-ci.yml
-
-# Local tooling
-.vscode/
-.idea/
-
-# Generated files
-dist/
-coverage/</code></pre>
-  <p>
-    The ignore filtering is applied during <code>buildRemappedTree()</code>. After the tree is constructed in
-    the temporary index, any files matching the ignore patterns are removed from the index before
-    <code>git write-tree</code> finalizes the tree hash.
-  </p>
-  <div class="callout">
-    <strong>Note:</strong> Place <code>.shadowignore</code> at the root of the synced content (e.g. <code>backend/.shadowignore</code> in RepoA, <code>.shadowignore</code> in RepoB). Each side controls what
-    RepoA sends to RepoB (during <code>--from a</code>). RepoB's ignore controls what RepoB sends to RepoA
-    (during <code>--from b</code>).
-  </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- 8. FILE REFERENCE                                                -->
-<!-- ================================================================ -->
-<h2 id="files">8. File Reference</h2>
-
-<div class="card">
-  <table>
-    <tr><th>File</th><th>Purpose</th></tr>
-    <tr>
-      <td><code>shadow-config.json</code></td>
-      <td>Pair definitions, trailer names, git config overrides, buffer size, and branch prefix settings.</td>
-    </tr>
-    <tr>
-      <td><code>shadow-common.ts</code></td>
-      <td>Shared library: config loading, git helpers, the unified replay engine, trailer handling, preflight checks.</td>
-    </tr>
-    <tr>
-      <td><code>shadow-setup.ts</code></td>
-      <td>Bootstrap script. Records the seed commit so that sync skips all existing history before that point.</td>
-    </tr>
-    <tr>
-      <td><code>shadow-sync.ts</code></td>
-      <td>Main entry point. Single script for both directions, selected by <code>--from a</code> or <code>--from b</code>.</td>
-    </tr>
-    <tr>
-      <td><code>.shadowignore</code></td>
-      <td>Glob patterns for files to exclude from sync (one pattern per line).</td>
-    </tr>
-    <tr>
-      <td><code>shadow-tests/</code></td>
-      <td>39 automated tests covering pull, push, multi-pair, cascade prevention, and edge-case scenarios.</td>
-    </tr>
-    <tr>
-      <td><code>.github/workflows/shadow-sync.yml</code></td>
-      <td>CI pull workflow: runs on a cron schedule to pull changes from the external repo.</td>
-    </tr>
-    <tr>
-      <td><code>.github/workflows/shadow-forward.yml</code></td>
-      <td>CI push workflow: CI push workflow: runs on a cron schedule to push changes to the other repo.</td>
-    </tr>
-  </table>
-</div>
-
-<!-- ================================================================ -->
-<!-- 9. KEY FUNCTIONS                                                  -->
-<!-- ================================================================ -->
-<h2 id="functions">9. Key Functions</h2>
-
-<div class="card">
-  <h3><span class="tag tag-blue">Category</span> Config &amp; Utilities</h3>
-  <table>
-    <tr><th>Function</th><th>Description</th></tr>
-    <tr><td><code>loadConfig()</code></td><td>Reads <code>shadow-config.json</code>, fills in defaults for optional fields.</td></tr>
-    <tr><td><code>git(args, opts?)</code></td><td>Single entry point for all git commands. Applies <code>gitConfigOverrides</code> as <code>-c</code> flags. <code>{safe:true}</code> returns result object instead of throwing on non-zero exit. <code>{plain:true}</code> skips config overrides (needed for working-tree operations on Windows where <code>core.autocrlf</code> override can cause issues).</td></tr>
-    <tr><td><code>ensureRemote(endpoint)</code></td><td>Adds or updates a git remote if the endpoint has a <code>url</code> configured.</td></tr>
-    <tr><td><code>validateName(value, label)</code></td><td>Security check: rejects values containing <code>..</code>, absolute paths, or leading <code>-</code> to prevent path traversal and flag injection.</td></tr>
-    <tr><td><code>die(msg)</code></td><td>Prints error message and exits the process.</td></tr>
-    <tr><td><code>refExists(ref)</code></td><td>Checks whether a git ref exists (branch, tag, or commit).</td></tr>
-    <tr><td><code>getCurrentBranch()</code></td><td>Returns the name of the currently checked-out branch.</td></tr>
-    <tr><td><code>listBranches(remote)</code></td><td>Lists all branches on a given remote.</td></tr>
-    <tr><td><code>shadowBranchName(pairName, branch)</code></td><td>Constructs the shadow branch name: <code>{prefix}/{pairName}/{branch}</code>.</td></tr>
-    <tr><td><code>appendTrailer(message, trailer)</code></td><td>Appends a trailer line to a commit message, following git trailer conventions.</td></tr>
-    <tr><td><code>preflightChecks(ref)</code></td><td>Checks a ref for unsupported features: shallow clone, submodules, symlinks, case conflicts, LFS objects.</td></tr>
-    <tr><td><code>handlePreflightResults(warnings)</code></td><td>Prints preflight warnings, returns <code>false</code> if any are errors (not just warnings).</td></tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-green">Category</span> Replay Engine</h3>
-  <table>
-    <tr><th>Function</th><th>Description</th></tr>
-    <tr><td><code>getCommitMeta(hash)</code></td><td>Extracts author name/email/date, committer name/email/date, commit message, and parent hashes from a commit object.</td></tr>
-    <tr><td><code>commitEnv(meta)</code></td><td>Builds the <code>GIT_AUTHOR_NAME</code>, <code>GIT_AUTHOR_EMAIL</code>, <code>GIT_AUTHOR_DATE</code>, <code>GIT_COMMITTER_NAME</code>, <code>GIT_COMMITTER_EMAIL</code>, <code>GIT_COMMITTER_DATE</code> environment variables from commit metadata.</td></tr>
-    <tr><td><code>stripTrailers(message)</code></td><td>Removes all <code>Shadow-*</code> trailers from a commit message to produce a clean message for the replayed commit (before adding the new direction-specific trailer).</td></tr>
-    <tr><td><code>buildTrailerMapping(logArgs, trailerRe)</code></td><td>Scans <code>git log</code> output for trailer-based SHA mappings. Used to build the initial SHA mapping from previously replayed commits.</td></tr>
-    <tr><td><code>resolveParents(commit, shaMapping, graftBase)</code></td><td>Maps a source commit's parents to their replayed equivalents using the SHA mapping. Falls back to the graft base for parents that predate the seed.</td></tr>
-    <tr><td><code>buildRemappedTree(opts)</code></td><td>Unified tree builder. Handles prefix add/strip, base tree overlay, and auto-discovers <code>.shadowignore</code> from the source commit. Returns a tree hash.</td></tr>
-    <tr><td><code>collectBranchCommits(refs, seedHash?)</code></td><td>Collects commits from remote branch refs in topological order. Stops at the seed boundary if provided.</td></tr>
-    <tr><td><code>collectCommitsForDir(refs, dir, seedBoundary?)</code></td><td>Like <code>collectBranchCommits</code> but filters to only commits that touch the given <code>dir/</code> path.</td></tr>
-    <tr><td><code>buildBranchMapping(remote, branches, shaMapping)</code></td><td>After replay, maps branch names to their final replayed SHA using the mapping table.</td></tr>
-    <tr><td><code>replayCommits(opts)</code></td><td>The core orchestration function. Takes <code>{pair, from: "a"|"b", branches, sourceBranch?}</code>. Fetches, collects commits, replays them, updates shadow branch refs. Returns <code>{mirrored, branchMapping, upToDate}</code>.</td></tr>
-    <tr><td><code>findSeedHash(pairName)</code></td><td>Searches git log for the <code>Shadow-seed: {pairName} {hash}</code> trailer and returns the recorded hash.</td></tr>
-    <tr><td><code>findSeedCommit(pairName)</code></td><td>Finds the workspace commit (not the hash in the trailer, but the commit that contains the seed trailer) for graft base resolution.</td></tr>
-  </table>
-</div>
-
-<!-- ================================================================ -->
-<!-- 10. CLI USAGE                                                    -->
-<!-- ================================================================ -->
-<h2 id="cli">10. CLI Usage</h2>
-
-<div class="card">
-  <h3>Command-line flags</h3>
-  <table>
-    <tr><th>Flag</th><th>Alias</th><th>Description</th><th>Default</th></tr>
-    <tr>
-      <td><code>--from</code></td>
-      <td><code>-f</code></td>
-      <td>Direction: <code>a</code> or <code>b</code>. Determines which endpoint is the source.</td>
-      <td><code>b</code></td>
-    </tr>
-    <tr>
-      <td><code>--pair</code></td>
-      <td><code>-r</code></td>
-      <td>Name of the pair to sync. If omitted, all pairs are synced.</td>
-      <td>All pairs</td>
-    </tr>
-    <tr>
-      <td><code>-b</code></td>
-      <td>&mdash;</td>
-      <td>Specific branch to sync. If omitted, syncs all remote branches (orchestrator) or current branch (workspace).</td>
-      <td>All / current</td>
-    </tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3>Usage examples</h3>
-  <pre><code># Pull all branches from RepoB into shadow branches on RepoA
-npx ts-node shadow-sync.ts --from b
-
-# Pull only the "main" branch for the "backend" pair
-npx ts-node shadow-sync.ts --from b --pair backend -b main
-
-# Push RepoA's commits to shadow branches on RepoB
-npx ts-node shadow-sync.ts --from a
-
-# Push a specific branch for a specific pair
-npx ts-node shadow-sync.ts --from a -r backend -b feature/auth
-
-# Bootstrap: record the seed for a pair
-npx ts-node shadow-setup.ts --pair backend</code></pre>
-</div>
-
-<!-- ================================================================ -->
-<!-- 11. DESIGN DECISIONS                                             -->
-<!-- ================================================================ -->
-<h2 id="design">11. Design Decisions</h2>
-
-<div class="card">
-  <div class="step">
-    <span class="step-num">1</span>
-    <div>
-      <strong>Per-commit replay preserves authorship.</strong>
-      Each commit is replayed individually with the original author and committer metadata. This means
-      <code>git blame</code>, <code>git log --author</code>, and contribution statistics work correctly
-      on both sides.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">2</span>
-    <div>
-      <strong>Full-repo tree in shadow commits enables plain <code>git merge</code>.</strong>
-      By grafting onto a base tree, shadow branches carry the complete repository tree. Merging a shadow branch
-      into the target repo's main branch is a standard merge operation with no special flags or tricks needed.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">3</span>
-    <div>
-      <strong>Topology-preserving.</strong>
-      All branches are processed in one topological pass. Shared ancestors are replayed once and reused.
-      Merge commits retain their merge structure. The resulting shadow history is a faithful mirror of the
-      source's branch and merge topology.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">4</span>
-    <div>
-      <strong>Trailers instead of state files.</strong>
-      Deduplication state is embedded in the commit messages themselves, not in external files or databases.
-      This makes the system portable across clones, CI environments, and orchestrators &mdash; any clone of
-      the repo carries the full sync state.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">5</span>
-    <div>
-      <strong>Git plumbing commands: fast, no worktree needed.</strong>
-      The replay engine uses <code>git read-tree</code>, <code>git write-tree</code>, and
-      <code>git commit-tree</code> instead of checkout-based workflows. This means no files are written
-      to disk, no worktree is needed, and the process is fast even for large repositories.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">6</span>
-    <div>
-      <strong>Cross-platform git config overrides.</strong>
-      The <code>gitConfigOverrides</code> field in config applies settings like <code>core.autocrlf=false</code>
-      to every git command, ensuring consistent behavior across Windows, macOS, and Linux.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">7</span>
-    <div>
-      <strong>Symmetric a/b config.</strong>
-      Endpoints are labeled <code>a</code> and <code>b</code> with no inherent hierarchy. The same tool and
-      config works from either side. Direction is purely a runtime choice.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">8</span>
-    <div>
-      <strong>Orchestrator support.</strong>
-      When running from a third-party repo, the graft base falls back to the target's main branch tip
-      instead of requiring a local seed commit. This enables centralized CI workflows.
-    </div>
-  </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- 12. TEST SUITE                                                   -->
-<!-- ================================================================ -->
-<h2 id="tests">12. Test Suite <span class="badge-count">39</span></h2>
-
-<div class="card">
-  <h3><span class="tag tag-blue">Pull</span> Pull tests (B &rarr; A) <span class="badge-count">17</span></h3>
-  <table>
-    <tr><th>Test</th><th>What it verifies</th></tr>
-    <tr><td>basic</td><td>Simple commit replay with prefix addition</td></tr>
-    <tr><td>deletions</td><td>File deletions are correctly replayed</td></tr>
-    <tr><td>crlf</td><td>Line ending handling across platforms</td></tr>
-    <tr><td>deep-dirs</td><td>Deeply nested directory structures</td></tr>
-    <tr><td>empty-patch</td><td>Commits that result in no tree change after filtering</td></tr>
-    <tr><td>filemode</td><td>Executable file mode preservation</td></tr>
-    <tr><td>large-file</td><td>Files near or above typical buffer limits</td></tr>
-    <tr><td>binary</td><td>Binary file content preservation</td></tr>
-    <tr><td>feature-branch</td><td>Feature branch replay alongside main</td></tr>
-    <tr><td>feature-range</td><td>Replaying a range of commits on a feature branch</td></tr>
-    <tr><td>case-conflict</td><td>Files differing only in case (preflight warning)</td></tr>
-    <tr><td>shallow-clone</td><td>Detection and rejection of shallow clones</td></tr>
-    <tr><td>lfs-warn</td><td>Warning when LFS objects are detected</td></tr>
-    <tr><td>submodule-warn</td><td>Warning when submodules are detected</td></tr>
-    <tr><td>symlink-warn</td><td>Warning when symlinks are detected</td></tr>
-    <tr><td>shared-topology</td><td>Shared ancestors across branches get same SHA</td></tr>
-    <tr><td>author-preservation</td><td>Author/committer metadata fidelity</td></tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-green">Push</span> Push tests (A &rarr; B) <span class="badge-count">16</span></h3>
-  <table>
-    <tr><th>Test</th><th>What it verifies</th></tr>
-    <tr><td>basic</td><td>Simple commit replay with prefix stripping</td></tr>
-    <tr><td>deletions</td><td>File deletions replayed in reverse direction</td></tr>
-    <tr><td>crlf</td><td>Line endings in the push direction</td></tr>
-    <tr><td>deep-dirs</td><td>Deep directories with prefix stripping</td></tr>
-    <tr><td>binary</td><td>Binary files in push direction</td></tr>
-    <tr><td>shadowignore</td><td>Files excluded by <code>.shadowignore</code> are not sent</td></tr>
-    <tr><td>shadowignore-deep</td><td>Nested <code>.shadowignore</code> patterns</td></tr>
-    <tr><td>shadowignore-not-in-tree</td><td>Ignore file references path not present in tree</td></tr>
-    <tr><td>dry-run</td><td>Dry-run mode does not create commits</td></tr>
-    <tr><td>no-changes</td><td>Idempotent when already up to date</td></tr>
-    <tr><td>uncommitted</td><td>Handling of uncommitted workspace changes</td></tr>
-    <tr><td>dir-flag</td><td>Directory filtering via command-line flag</td></tr>
-    <tr><td>branch-merge</td><td>Merge commit topology in push direction</td></tr>
-    <tr><td>merge-ancestry</td><td>Correct parent resolution for merge commits</td></tr>
-    <tr><td>merge-with-external-changes</td><td>Merges that include changes outside the synced dir</td></tr>
-    <tr><td>merge-preserves-non-dir</td><td>Merges do not lose files outside the synced directory</td></tr>
-  </table>
-</div>
-
-<div class="grid-2">
-  <div class="card">
-    <h3><span class="tag tag-purple">Multi</span> Multi-pair tests <span class="badge-count">3</span></h3>
-    <table>
-      <tr><th>Test</th><th>What it verifies</th></tr>
-      <tr><td>multi-pull</td><td>Multiple pairs pulled in one run</td></tr>
-      <tr><td>multi-push</td><td>Multiple pairs pushed in one run</td></tr>
-      <tr><td>multi-independent</td><td>Independent pairs do not interfere</td></tr>
-    </table>
-  </div>
-  <div class="card">
-    <h3><span class="tag tag-orange">Other</span> Other tests <span class="badge-count">2</span></h3>
-    <table>
-      <tr><th>Test</th><th>What it verifies</th></tr>
-      <tr><td>custom-branch-prefix</td><td>Non-default <code>shadowBranchPrefix</code> works</td></tr>
-      <tr><td>import-conflict</td><td>Conflict detection during import</td></tr>
-    </table>
-  </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- 13. GITHUB ACTIONS                                               -->
-<!-- ================================================================ -->
-<h2 id="actions">13. GitHub Actions</h2>
-
-<div class="grid-2">
-  <div class="card">
-    <h3><span class="tag tag-blue">Pull</span> shadow-sync.yml</h3>
-    <p><strong>Trigger:</strong> Cron schedule (every 15 minutes, disabled until real URLs are configured).</p>
-    <p><strong>Action:</strong> Runs <code>shadow-sync.ts --from b</code> to pull new commits from the external
-    repo into shadow branches.</p>
-    <p><strong>Flow:</strong></p>
-    <ol>
-      <li>Checkout the repository</li>
-      <li>Install dependencies</li>
-      <li>Run <code>shadow-sync --from b</code></li>
-      <li>Push updated shadow branches</li>
-    </ol>
-  </div>
-  <div class="card">
-    <h3><span class="tag tag-green">Push</span> shadow-forward.yml</h3>
-    <p><strong>Trigger:</strong> Push to <code>shadow/**</code> branches.</p>
-    <p><strong>Guard:</strong> Only processes commits that contain the <code>Shadow-replayed (</code> trailer.
-    This prevents the workflow from triggering on every shadow branch update.</p>
-    <p><strong>Action:</strong> Runs <code>shadow-sync.ts --from a</code> to push commits to the external repo.</p>
-    <p><strong>Secret:</strong> Requires <code>EXTERNAL_REPO_TOKEN</code> (a fine-grained PAT) to authenticate
-    with the external repository.</p>
-  </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- 14. PAT SETUP                                                    -->
-<!-- ================================================================ -->
-<h2 id="pat">14. PAT Setup (Fine-Grained GitHub Token)</h2>
-
-<div class="card">
-  <h3><span class="tag tag-orange">Auth</span> Creating a fine-grained Personal Access Token</h3>
-  <p>
-    The push workflow (<code>shadow-forward.yml</code>) needs a GitHub token to push to the external repository.
-    A fine-grained PAT scoped to just the target repository is the recommended approach.
-  </p>
-
-  <div class="step">
-    <span class="step-num">1</span>
-    <div>
-      <strong>Navigate to token settings.</strong>
-      Go to <code>GitHub &rarr; Settings &rarr; Developer settings &rarr; Personal access tokens &rarr; Fine-grained tokens</code>.
-      Click <strong>Generate new token</strong>.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">2</span>
-    <div>
-      <strong>Configure token scope.</strong>
-      <ul>
-        <li><strong>Token name:</strong> Something descriptive, e.g. <code>shadow-sync-push-repoB</code></li>
-        <li><strong>Expiration:</strong> Choose based on your security policy (90 days is common)</li>
-        <li><strong>Resource owner:</strong> Select the organization or user that owns the target repo</li>
-        <li><strong>Repository access:</strong> Select <strong>Only select repositories</strong> and choose the target repo</li>
-      </ul>
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">3</span>
-    <div>
-      <strong>Set permissions.</strong>
-      Under <strong>Repository permissions</strong>, grant:
-      <ul>
-        <li><strong>Contents:</strong> Read and write (needed to push commits and branches)</li>
-        <li><strong>Metadata:</strong> Read-only (automatically selected)</li>
-      </ul>
-      All other permissions should remain at <strong>No access</strong>.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">4</span>
-    <div>
-      <strong>Generate and save the token.</strong>
-      Click <strong>Generate token</strong>. Copy the token immediately &mdash; it will not be shown again.
-    </div>
-  </div>
-
-  <div class="step">
-    <span class="step-num">5</span>
-    <div>
-      <strong>Add as a repository secret.</strong>
-      In the <em>source</em> repository (where the workflow runs), go to
-      <code>Settings &rarr; Secrets and variables &rarr; Actions</code>.
-      Click <strong>New repository secret</strong>. Name it <code>EXTERNAL_REPO_TOKEN</code> and paste the token value.
-    </div>
-  </div>
-
-  <div class="callout-warn callout">
-    <strong>Security note:</strong> Fine-grained tokens are scoped to specific repositories and have explicit
-    permissions, making them significantly more secure than classic PATs. Always use the minimum permissions
-    required. Set an expiration date and rotate tokens before they expire.
-  </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- 15. GIT COMMANDS REFERENCE                                       -->
-<!-- ================================================================ -->
-<h2 id="git-commands">15. Git Commands Reference</h2>
-
-<div class="card">
-  <h3><span class="tag tag-blue">Plumbing</span> Core git plumbing used by Shadow Sync</h3>
-  <p>
-    Shadow Sync operates entirely via git plumbing commands, avoiding porcelain commands that require a
-    working tree. Here are the key commands and how they are used:
-  </p>
-
-  <table>
-    <tr><th>Command</th><th>Purpose in Shadow Sync</th></tr>
-    <tr>
-      <td><code>git rev-parse {hash}:{dir}</code></td>
-      <td>Extract the tree object for a subdirectory from a commit. Used to isolate the synced subtree when the source has a non-empty <code>dir</code>.</td>
-    </tr>
-    <tr>
-      <td><code>git read-tree --prefix={dir}/</code></td>
-      <td>Place a tree under a directory prefix in the index. Used when the target has a non-empty <code>dir</code>.</td>
-    </tr>
-    <tr>
-      <td><code>git read-tree</code></td>
-      <td>Load a tree into the index. Used to set up the graft base tree before overlaying synced content.</td>
-    </tr>
-    <tr>
-      <td><code>git write-tree</code></td>
-      <td>Write the current index contents as a tree object. Produces the final tree hash for each replayed commit.</td>
-    </tr>
-    <tr>
-      <td><code>git commit-tree</code></td>
-      <td>Create a commit object from a tree hash, parent hash(es), and metadata. The core commit creation step.</td>
-    </tr>
-    <tr>
-      <td><code>git update-ref</code></td>
-      <td>Point a branch ref to a specific commit. Used to update shadow branch pointers after replay.</td>
-    </tr>
-    <tr>
-      <td><code>git cat-file</code></td>
-      <td>Read git object contents. Used in <code>getCommitMeta()</code> to extract author/committer/message fields.</td>
-    </tr>
-    <tr>
-      <td><code>git log --format=...</code></td>
-      <td>Walk commit history with custom format strings. Used for trailer scanning, topo ordering, and seed discovery.</td>
-    </tr>
-    <tr>
-      <td><code>git rev-list --topo-order</code></td>
-      <td>List commits in topological order. Ensures parents are replayed before children.</td>
-    </tr>
-    <tr>
-      <td><code>git ls-tree</code></td>
-      <td>List tree contents. Used during <code>.shadowignore</code> filtering and preflight checks (symlinks, submodules).</td>
-    </tr>
-    <tr>
-      <td><code>git rm --cached</code></td>
-      <td>Remove entries from the index without touching the working tree. Used to apply <code>.shadowignore</code> filtering.</td>
-    </tr>
-    <tr>
-      <td><code>git remote add / set-url</code></td>
-      <td>Configure remotes for the two endpoints. Handled by <code>ensureRemote()</code>.</td>
-    </tr>
-    <tr>
-      <td><code>git fetch</code></td>
-      <td>Download objects and refs from a remote. Run at the start of each sync to get the latest state.</td>
-    </tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-green">Porcelain</span> Common user-facing commands for working with shadow branches</h3>
-  <pre><code># List shadow branches
-git branch -a | grep shadow/
-
-# View the shadow branch log
-git log shadow/backend/main --oneline
-
-# Merge a shadow branch into your main branch
-git checkout main
-git merge shadow/backend/main
-
-# Compare shadow branch to main
-git diff main..shadow/backend/main
-
-# Inspect a shadow commit's trailers
-git log -1 --format="%B" shadow/backend/main
-
-# Delete a shadow branch (if needed)
-git branch -D shadow/backend/main
-
-# Push shadow branches to remote
-git push origin shadow/backend/main</code></pre>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-purple">Setup</span> Initial setup commands</h3>
-  <pre><code># Clone the repo and install dependencies
-git clone https://github.com/org/repo-a.git
-cd repo-a
-npm install
-
-# Bootstrap the sync (records the seed)
-npx tsx shadow-setup.ts --pair backend
-
-# Run the first sync
-npx tsx shadow-sync.ts --from b
-
-# Verify shadow branches were created
-git branch | grep shadow/
-
-# Inspect the seed trailer
-git log --all --grep="Shadow-seed: backend" --oneline</code></pre>
-</div>
-
-<!-- ================================================================ -->
-<!-- 16. SECURITY                                                     -->
-<!-- ================================================================ -->
-<h2 id="security">16. Security</h2>
-
-<div class="card">
-  <h3><span class="tag tag-red">Input validation</span> <code>validateName()</code></h3>
-  <p>
-    All user-supplied names (pair names, remote names, branch names) pass through <code>validateName()</code>,
-    which rejects:
-  </p>
-  <ul>
-    <li><strong>Path traversal:</strong> Values containing <code>..</code> are rejected to prevent directory escape.</li>
-    <li><strong>Absolute paths:</strong> Values starting with <code>/</code> or containing <code>:</code> (Windows drive letters) are rejected.</li>
-    <li><strong>Flag injection:</strong> Values starting with <code>-</code> are rejected to prevent them from being interpreted as command-line flags by git.</li>
-  </ul>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-red">Credential handling</span> Token security</h3>
-  <ul>
-    <li>Tokens are stored as GitHub repository secrets, never in code or config files.</li>
-    <li>Fine-grained PATs are scoped to the minimum required repository and permissions.</li>
-    <li>The <code>shadow-config.json</code> file contains only remote URLs (which are public for public repos) &mdash; never tokens or credentials.</li>
-    <li>In CI, the token is injected via the URL: <code>https://x-access-token:{token}@github.com/org/repo.git</code>. This is handled by the workflow, not by the sync tool itself.</li>
-  </ul>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-red">Preflight safety checks</span></h3>
-  <p>
-    Before replaying commits, <code>preflightChecks()</code> scans the source for potential issues:
-  </p>
-  <table>
-    <tr><th>Check</th><th>Severity</th><th>Reason</th></tr>
-    <tr>
-      <td>Shallow clone</td>
-      <td><span class="tag tag-red">Error</span></td>
-      <td>Shallow clones lack full history. Replaying from a shallow clone would produce incomplete or incorrect results.</td>
-    </tr>
-    <tr>
-      <td>Submodules</td>
-      <td><span class="tag tag-orange">Warning</span></td>
-      <td>Submodule references (gitlinks) cannot be meaningfully replayed. The file will appear as a broken reference in the target.</td>
-    </tr>
-    <tr>
-      <td>Symlinks</td>
-      <td><span class="tag tag-orange">Warning</span></td>
-      <td>Symlinks may point to paths that do not exist after prefix remapping, leading to broken links.</td>
-    </tr>
-    <tr>
-      <td>Case conflicts</td>
-      <td><span class="tag tag-orange">Warning</span></td>
-      <td>Files differing only in case (e.g. <code>README.md</code> vs <code>readme.md</code>) cause problems on case-insensitive filesystems (Windows, macOS default).</td>
-    </tr>
-    <tr>
-      <td>LFS objects</td>
-      <td><span class="tag tag-orange">Warning</span></td>
-      <td>Git LFS pointer files will be replayed as-is. The target repo needs LFS configured to resolve them.</td>
-    </tr>
-  </table>
-</div>
-
-<div class="card">
-  <h3><span class="tag tag-red">No working tree exposure</span></h3>
-  <p>
-    Shadow Sync operates entirely on git objects (trees, blobs, commits) via plumbing commands.
-    No files are written to disk during replay, which means:
-  </p>
-  <ul>
-    <li>No risk of overwriting uncommitted work in the working directory.</li>
-    <li>No temporary files that could leak sensitive content.</li>
-    <li>The process can run safely in CI without a clean checkout.</li>
-  </ul>
-</div>
-
-<!-- ================================================================ -->
-<!-- FOOTER                                                           -->
-<!-- ================================================================ -->
-<footer>
-  Shadow Sync &mdash; Technical Reference
-</footer>
+<h3>Two layers of protection</h3>
+
+<ol>
+  <li>
+    <strong>Skip already-replayed commits.</strong>
+    Before replay, <code>buildTrailerMapping()</code> scans the target's shadow branch history and
+    builds a hash &rarr; SHA map of every commit that's already been replayed. These are skipped.
+  </li>
+  <li>
+    <strong>Skip "echo" commits.</strong>
+    When syncing from A to B, the replayed commit on B carries <code>Shadow-replayed (repo-a): ...</code>.
+    Later, when syncing B back to A, the engine sees this trailer and knows the commit originated
+    from A &mdash; it skips replaying it back. The trailer key to look for is direction-specific:
+    <ul>
+      <li>Syncing A&rarr;B: add <code>Shadow-replayed (repo-a)</code>, skip commits containing <code>Shadow-replayed (repo-b)</code></li>
+      <li>Syncing B&rarr;A: add <code>Shadow-replayed (repo-b)</code>, skip commits containing <code>Shadow-replayed (repo-a)</code></li>
+    </ul>
+  </li>
+</ol>
+
+<div class="diagram">RepoA commit: "Add feature X"
+      |
+      v  sync --from a
+RepoB shadow commit: "Add feature X
+                       Shadow-replayed (repo-a): abc123"
+      |
+      v  merge into RepoB main
+RepoB commit: "Add feature X
+               Shadow-replayed (repo-a): abc123"
+      |
+      v  sync --from b
+      SKIPPED &mdash; trailer says this came from repo-a</div>
+
+<!-- ── 8. .shadowignore ────────────────────────────────────────────────── -->
+
+<h2 id="shadowignore">8. .shadowignore</h2>
+
+<p>
+  Each repo can control which files it <em>sends</em> to the other side. Place a <code>.shadowignore</code>
+  file at the root of the synced content:
+</p>
+
+<table>
+  <tr><th>Repo</th><th>Config dir</th><th>File location</th></tr>
+  <tr><td>RepoA</td><td><code>"backend"</code></td><td><code>backend/.shadowignore</code></td></tr>
+  <tr><td>RepoB</td><td><code>""</code> (root)</td><td><code>.shadowignore</code></td></tr>
+</table>
+
+<p>Patterns work like <code>.gitignore</code> basics:</p>
+<ul>
+  <li><code>*</code> matches within a single path segment</li>
+  <li><code>**</code> matches across path segments</li>
+  <li>Lines starting with <code>#</code> are comments</li>
+</ul>
+
+<pre><code>CLAUDE.md
+.cursor/
+**/*.local
+secrets/</code></pre>
+
+<p>
+  The ignore file is auto-discovered per commit from the source tree (<code>git show {commit}:{path}/.shadowignore</code>),
+  so adding or removing patterns takes effect immediately on the next sync without any
+  configuration change.
+</p>
+
+<!-- ── 9. Preflight Checks ─────────────────────────────────────────────── -->
+
+<h2 id="preflight">9. Preflight Checks</h2>
+
+<p>Before replaying, the engine scans each source branch for potential issues:</p>
+
+<table>
+  <tr><th>Check</th><th>Severity</th><th>Reason</th></tr>
+  <tr>
+    <td>Shallow clone</td>
+    <td><span class="tag tag-red">Error</span></td>
+    <td>Replay needs full history to compute diffs and map parents.</td>
+  </tr>
+  <tr>
+    <td>Case-insensitive filename conflict</td>
+    <td><span class="tag tag-red">Error</span></td>
+    <td>Files like <code>Readme.md</code> and <code>readme.md</code> break on Windows/macOS.</td>
+  </tr>
+  <tr>
+    <td>Submodules</td>
+    <td><span class="tag tag-orange">Warning</span></td>
+    <td>Submodule entries are replayed as gitlinks, which may not resolve on the other side.</td>
+  </tr>
+  <tr>
+    <td>Symlinks</td>
+    <td><span class="tag tag-orange">Warning</span></td>
+    <td>Symlink targets are not adjusted during prefix remapping.</td>
+  </tr>
+  <tr>
+    <td>Git LFS pointers</td>
+    <td><span class="tag tag-orange">Warning</span></td>
+    <td>LFS objects exist in a separate store; the pointer is replayed but the blob may not transfer.</td>
+  </tr>
+</table>
+
+<p>Branches with errors are skipped. Warnings are printed but replay continues.</p>
+
+<!-- ── 10. File Reference ──────────────────────────────────────────────── -->
+
+<h2 id="files">10. File Reference</h2>
+
+<table>
+  <tr><th>File</th><th>Purpose</th></tr>
+  <tr><td><code>shadow-common.ts</code></td><td>Core library: config loading, git wrapper, replay engine, tree builder, trailer management, preflight checks</td></tr>
+  <tr><td><code>shadow-sync.ts</code></td><td>Main entry point: argument parsing, branch loop, shadow branch push, merge reconciliation</td></tr>
+  <tr><td><code>shadow-setup.ts</code></td><td>Bootstrap: records the seed commit that marks where shared history begins</td></tr>
+  <tr><td><code>shadow-config.example.json</code></td><td>Configuration template with all supported options</td></tr>
+  <tr><td><code>.shadowignore</code></td><td>Per-repo file exclusion patterns (auto-discovered from source tree)</td></tr>
+  <tr><td><code>shadow-tests/</code></td><td>39 automated tests: pull, push, merge, topology, edge cases</td></tr>
+  <tr><td><code>.github/workflows/shadow-sync.yml</code></td><td>CI workflow: pull from B (cron)</td></tr>
+  <tr><td><code>.github/workflows/shadow-forward.yml</code></td><td>CI workflow: push from A (cron, needs PAT)</td></tr>
+</table>
 
 </body>
 </html>
