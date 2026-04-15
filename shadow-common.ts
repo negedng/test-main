@@ -599,7 +599,12 @@ export function replayCommits(opts: {
     baseTreeSource = graftBase;
   } else {
     // Target is at root — no full-repo overlay needed.
-    graftBase = seed?.seedHash ?? null;
+    // Prefer the target's main branch tip so replayed commits descend from
+    // the target's actual history (clean diffs). Fall back to seedHash only
+    // if the target remote has no main branch yet.
+    graftBase = refExists(`${target.remote}/main`)
+      ? git(["rev-parse", `${target.remote}/main`])
+      : (seed?.seedHash ?? null);
     baseTreeSource = null;
   }
 
