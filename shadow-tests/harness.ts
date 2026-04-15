@@ -405,6 +405,29 @@ export function getExternalShadowLogFull(env: TestEnv, n = 20, remote?: RemoteIn
   }
 }
 
+/** Get the --name-only diff of the latest shadow commit on origin. */
+export function getShadowDiffFiles(env: TestEnv, remote?: RemoteInfo): string[] {
+  const subdir = remote?.subdir ?? env.subdir;
+  const shadowBranch = `${env.branchPrefix}/${subdir}/main`;
+  try { git(`fetch origin ${shadowBranch}`, env.localRepo); } catch { return []; }
+  try {
+    return git(`diff-tree --no-commit-id -r --name-only origin/${shadowBranch}`, env.localRepo)
+      .split("\n").filter(Boolean);
+  } catch { return []; }
+}
+
+/** Get the --name-only diff of the latest shadow commit on the external remote. */
+export function getExternalShadowDiffFiles(env: TestEnv, remote?: RemoteInfo): string[] {
+  const remoteName = remote?.remoteName ?? env.remoteName;
+  const subdir = remote?.subdir ?? env.subdir;
+  const shadowBranch = `${env.branchPrefix}/${subdir}/main`;
+  try { git(`fetch ${remoteName} ${shadowBranch}`, env.localRepo); } catch { return []; }
+  try {
+    return git(`diff-tree --no-commit-id -r --name-only ${remoteName}/${shadowBranch}`, env.localRepo)
+      .split("\n").filter(Boolean);
+  } catch { return []; }
+}
+
 /**
  * Merge the shadow branch into the local working branch.
  * Shadow commits now carry the full repo tree, so a plain merge works —
