@@ -360,62 +360,112 @@ function resolveParents(
   return parents;
 }
 
+/**
+ * Build a remapped tree by applying the source commit's diff (against its
+ * first parent) to the previous replayed tree. Only files that actually
+ * changed in the source commit are touched — producing clean, minimal diffs.
+ *
+ * For root commits (no parent), all files in sourceDir are treated as added.
+ */
 function buildRemappedTree(opts: {
   commitHash: string;
   sourceDir: string;
   targetDir: string;
-  baseTree: string | null;
+  parentTree: string | null;
   tmpIndex: string;
+  shadowIgnorePatterns: string[];
 }): string | null {
-  const { commitHash, sourceDir, targetDir, baseTree, tmpIndex } = opts;
+  const { commitHash, sourceDir, targetDir, parentTree, tmpIndex, shadowIgnorePatterns } = opts;
   const idxEnv = { GIT_INDEX_FILE: tmpIndex };
 
-  if (baseTree) {
-    git(["read-tree", baseTree], { env: idxEnv });
-    if (targetDir) {
-      git(["rm", "-r", "--cached", "--quiet", "-f", `${targetDir}/`], { env: idxEnv, safe: true });
-    }
+  // Start from the previous replayed commit's tree (or empty for the first)
+  if (parentTree) {
+    git(["read-tree", parentTree], { env: idxEnv });
   } else {
     git(["read-tree", "--empty"], { env: idxEnv });
   }
 
-  let sourceTreeRef: string;
-  if (sourceDir) {
-    const subtree = git(["rev-parse", `${commitHash}:${sourceDir}`], { safe: true });
-    if (!subtree.ok) return null;
-    sourceTreeRef = subtree.stdout;
+  // Compute what changed in the source commit.
+  // diff-tree -r gives: :oldmode newmode oldhash newhash status\tpath
+  const sourceParent = git(["rev-parse", `${commitHash}^`], { safe: true });
+  let diffOutput: string;
+
+  if (sourceParent.ok) {
+    // Normal commit — diff against first parent, scoped to sourceDir
+    const diffArgs = ["diff-tree", "-r", sourceParent.stdout, commitHash];
+    if (sourceDir) diffArgs.push("--", `${sourceDir}/`);
+    diffOutput = git(diffArgs, { safe: true }).stdout;
   } else {
-    sourceTreeRef = `${commitHash}^{tree}`;
+    // Root commit — list all files as additions
+    const lsArgs = ["ls-tree", "-r", commitHash];
+    if (sourceDir) lsArgs.push("--", `${sourceDir}/`);
+    const lsResult = git(lsArgs, { safe: true });
+    if (!lsResult.ok || !lsResult.stdout) return null;
+    // Convert ls-tree format to diff-tree-like "A" entries
+    diffOutput = lsResult.stdout.split("\n").filter(Boolean)
+      .map(line => {
+        const m = line.match(/^(\d+)\s+\w+\s+([0-9a-f]+)\t(.+)$/);
+        if (!m) return "";
+        return `:000000 ${m[1]} ${"0".repeat(40)} ${m[2]} A\t${m[3]}`;
+      }).join("\n");
   }
 
-  if (targetDir) {
-    git(["read-tree", `--prefix=${targetDir}/`, sourceTreeRef], { env: idxEnv });
-  } else {
-    git(["read-tree", sourceTreeRef], { env: idxEnv });
-  }
+  if (!diffOutput) return parentTree ?? null;
 
-  // Auto-discover .shadowignore from the source commit's tree.
-  // The file can be at the source root (sourceDir/.shadowignore or just .shadowignore).
-  const ignorePath = sourceDir ? `${sourceDir}/.shadowignore` : ".shadowignore";
-  const ignoreContent = git(["show", `${commitHash}:${ignorePath}`], { safe: true });
-  if (ignoreContent.ok && ignoreContent.stdout) {
-    const tmpIgnore = path.join(os.tmpdir(), `shadow-ignore-${Date.now()}`);
-    try {
-      fs.writeFileSync(tmpIgnore, ignoreContent.stdout);
-      const ignored = git(
-        ["ls-files", "--cached", "-i", "--exclude-from", tmpIgnore],
-        { env: idxEnv },
-      ).split("\n").filter(Boolean);
-      for (let i = 0; i < ignored.length; i += 100) {
-        git(["rm", "--cached", "-f", "--", ...ignored.slice(i, i + 100)],
-          { env: idxEnv, safe: true });
+  // Parse and apply each change
+  for (const line of diffOutput.split("\n").filter(Boolean)) {
+    const m = line.match(/^:\d+ (\d+) [0-9a-f]+ ([0-9a-f]+) ([AMDTRC])\d*\t(.+?)(?:\t(.+))?$/);
+    if (!m) continue;
+    const [, newMode, newHash, status, filePath, renameDest] = m;
+
+    // Map source path to target path
+    let srcRelative = filePath;
+    if (sourceDir) {
+      if (!srcRelative.startsWith(`${sourceDir}/`)) continue;
+      srcRelative = srcRelative.slice(sourceDir.length + 1);
+    }
+
+    // Skip files matching .shadowignore patterns
+    if (shadowIgnorePatterns.length > 0 && shadowIgnorePatterns.some(p => matchIgnorePattern(srcRelative, p))) {
+      continue;
+    }
+
+    const targetPath = targetDir ? `${targetDir}/${srcRelative}` : srcRelative;
+
+    if (status === "D") {
+      git(["rm", "--cached", "-f", "--quiet", "--", targetPath], { env: idxEnv, safe: true });
+    } else if (status === "R" || status === "C") {
+      // Rename/copy: remove old, add new
+      const oldRelative = srcRelative;
+      let newRelative = renameDest ?? filePath;
+      if (sourceDir && newRelative.startsWith(`${sourceDir}/`)) {
+        newRelative = newRelative.slice(sourceDir.length + 1);
       }
-    } finally {
-      fs.rmSync(tmpIgnore, { force: true });
+      const oldTarget = targetDir ? `${targetDir}/${oldRelative}` : oldRelative;
+      const newTarget = targetDir ? `${targetDir}/${newRelative}` : newRelative;
+      if (status === "R") {
+        git(["rm", "--cached", "-f", "--quiet", "--", oldTarget], { env: idxEnv, safe: true });
+      }
+      git(["update-index", "--add", "--cacheinfo", `${newMode},${newHash},${newTarget}`], { env: idxEnv });
+    } else {
+      // Add or modify
+      git(["update-index", "--add", "--cacheinfo", `${newMode},${newHash},${targetPath}`], { env: idxEnv });
     }
   }
 
   return git(["write-tree"], { env: idxEnv });
+}
+
+/** Simple .shadowignore pattern matcher (supports * and ** globs). */
+function matchIgnorePattern(filePath: string, pattern: string): boolean {
+  const regex = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*\*\//g, "<<GLOBSTAR_SLASH>>")
+    .replace(/\*\*/g, "<<GLOBSTAR>>")
+    .replace(/\*/g, "[^/]*")
+    .replace(/<<GLOBSTAR_SLASH>>/g, "(.*/)?")
+    .replace(/<<GLOBSTAR>>/g, ".*");
+  return new RegExp(`^${regex}$`).test(filePath);
 }
 
 /** Collect commits from remote-tracking branches in topo order. */
@@ -578,43 +628,36 @@ export function replayCommits(opts: {
 
   console.log(`Found ${newCommits.length} new commit(s) to replay.\n`);
 
-  // 5. Graft base — for merge-compatible shadow branches.
-  // The graft base gives shadow branches shared ancestry with the target repo
-  // so `git merge` works cleanly. We try (in order):
-  //   a) The seed commit in workspace history (when workspace IS the target repo)
-  //   b) The target repo's main branch tip (when running from an orchestrator)
-  //   c) The seed hash from the source side (when target.dir is empty)
+  // 5. Graft base — gives shadow branches shared ancestry with the target
+  // repo so `git merge` works. Used only as a commit parent, not for tree
+  // construction (diff-based replay builds trees incrementally).
   let graftBase: string | null;
-  let baseTreeSource: string | null;
 
   if (target.dir) {
-    // Target has a subdir — shadow commits need full-repo tree overlay.
-    // Use seed commit if it exists in the target repo's history (workspace IS
-    // the target). Otherwise fall back to the target's main branch tip (orchestrator).
     const seedInTarget = seed && refExists(`${target.remote}/main`)
       && git(["merge-base", "--is-ancestor", seed.seedCommit, `${target.remote}/main`], { safe: true }).ok;
     graftBase = seedInTarget
       ? seed!.seedCommit
       : (refExists(`${target.remote}/main`) ? git(["rev-parse", `${target.remote}/main`]) : null);
-    baseTreeSource = graftBase;
   } else {
-    // Target is at root — no full-repo overlay needed.
-    // Prefer the target's main branch tip so replayed commits descend from
-    // the target's actual history (clean diffs). Fall back to seedHash only
-    // if the target remote has no main branch yet.
     graftBase = refExists(`${target.remote}/main`)
       ? git(["rev-parse", `${target.remote}/main`])
       : (seed?.seedHash ?? null);
-    baseTreeSource = null;
   }
 
   if (graftBase) {
     console.log(`Using graft base ${graftBase.slice(0, 10)} for shared ancestry.`);
   }
 
-  // 6. Replay loop
+  // 6. Replay loop — diff-based: each commit's tree is built by applying
+  //    only the changed files to the previous replayed tree.
   const tmpIndex = path.join(os.tmpdir(), `shadow-replay-${Date.now()}`);
 
+  // Start from the graft base's tree (so the first replayed commit has a
+  // clean diff against its parent).
+  let lastTree = graftBase
+    ? git(["rev-parse", `${graftBase}^{tree}`], { safe: true }).stdout || null
+    : null;
   let lastSHA: string | null = null;
   try {
     for (const commit of newCommits) {
@@ -637,18 +680,26 @@ export function replayCommits(opts: {
 
       const mappedParents = resolveParents(commit, shaMapping, graftBase);
 
-      const baseTree = baseTreeSource
-        ? `${baseTreeSource}^{tree}`
-        : mappedParents.length > 0 && target.dir
-          ? `${mappedParents[0]}^{tree}`
-          : null;
+      // Use the first mapped parent's tree as the base for this commit,
+      // falling back to lastTree for linear history.
+      const parentTree = mappedParents.length > 0
+        ? git(["rev-parse", `${mappedParents[0]}^{tree}`], { safe: true }).stdout || lastTree
+        : lastTree;
+
+      // Load .shadowignore from this commit's tree
+      const ignorePath = source.dir ? `${source.dir}/.shadowignore` : ".shadowignore";
+      const ignoreContent = git(["show", `${commit.hash}:${ignorePath}`], { safe: true });
+      const shadowIgnorePatterns = ignoreContent.ok && ignoreContent.stdout
+        ? ignoreContent.stdout.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"))
+        : [];
 
       const tree = buildRemappedTree({
         commitHash: commit.hash,
         sourceDir: source.dir,
         targetDir: target.dir,
-        baseTree,
+        parentTree,
         tmpIndex,
+        shadowIgnorePatterns,
       });
 
       if (!tree) {
@@ -666,6 +717,7 @@ export function replayCommits(opts: {
       });
 
       shaMapping.set(commit.hash, newSHA);
+      lastTree = tree;
       lastSHA = newSHA;
       console.log(isEcho ? "  ✓ Recorded." : "  ✓ Replayed.");
     }
