@@ -347,15 +347,15 @@ function buildTrailerMapping(logArgs: string[], trailerRe: RegExp): Map<string, 
 function resolveParents(
   commit: TopoCommit,
   shaMapping: Map<string, string>,
-  graftBase: string | null,
+  fallbackParent: string | null,
 ): string[] {
   const parents: string[] = [];
   for (const parentHash of commit.parents) {
     const mapped = shaMapping.get(parentHash);
     if (mapped) parents.push(mapped);
   }
-  if (parents.length === 0 && graftBase) {
-    parents.push(graftBase);
+  if (parents.length === 0 && fallbackParent) {
+    parents.push(fallbackParent);
   }
   return parents;
 }
@@ -628,36 +628,23 @@ export function replayCommits(opts: {
 
   console.log(`Found ${newCommits.length} new commit(s) to replay.\n`);
 
-  // 5. Graft base — gives shadow branches shared ancestry with the target
-  // repo so `git merge` works. Used only as a commit parent, not for tree
-  // construction (diff-based replay builds trees incrementally).
-  let graftBase: string | null;
-
-  if (target.dir) {
-    const seedInTarget = seed && refExists(`${target.remote}/main`)
-      && git(["merge-base", "--is-ancestor", seed.seedCommit, `${target.remote}/main`], { safe: true }).ok;
-    graftBase = seedInTarget
-      ? seed!.seedCommit
-      : (refExists(`${target.remote}/main`) ? git(["rev-parse", `${target.remote}/main`]) : null);
-  } else {
-    graftBase = refExists(`${target.remote}/main`)
-      ? git(["rev-parse", `${target.remote}/main`])
-      : (seed?.seedHash ?? null);
+  // 5. Seed the SHA mapping so the first replayed commit chains naturally
+  // to the target's history (shared ancestry for `git merge`).
+  // The seed maps seedHash → seedCommit. For commits whose parents aren't
+  // in shaMapping (e.g. replaying from the other direction), we fall back
+  // to the target's main branch tip.
+  if (seed) {
+    shaMapping.set(seed.seedHash, seed.seedCommit);
   }
-
-  if (graftBase) {
-    console.log(`Using graft base ${graftBase.slice(0, 10)} for shared ancestry.`);
-  }
+  const fallbackParent = refExists(`${target.remote}/main`)
+    ? git(["rev-parse", `${target.remote}/main`])
+    : null;
 
   // 6. Replay loop — diff-based: each commit's tree is built by applying
   //    only the changed files to the previous replayed tree.
   const tmpIndex = path.join(os.tmpdir(), `shadow-replay-${Date.now()}`);
 
-  // Start from the graft base's tree (so the first replayed commit has a
-  // clean diff against its parent).
-  let lastTree = graftBase
-    ? git(["rev-parse", `${graftBase}^{tree}`], { safe: true }).stdout || null
-    : null;
+  let lastTree: string | null = null;
   let lastSHA: string | null = null;
   try {
     for (const commit of newCommits) {
@@ -678,7 +665,7 @@ export function replayCommits(opts: {
         console.log(`  Replaying ${label}...`);
       }
 
-      const mappedParents = resolveParents(commit, shaMapping, graftBase);
+      const mappedParents = resolveParents(commit, shaMapping, fallbackParent);
 
       // Use the first mapped parent's tree as the base for this commit,
       // falling back to lastTree for linear history.
