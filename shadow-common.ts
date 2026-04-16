@@ -1,4 +1,5 @@
 import { spawnSync } from "child_process";
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -267,19 +268,22 @@ interface CommitMeta {
   committerEmail: string;
   committerDate:  string;
   message:        string;
+  /** Parsed trailer block only, from git's own interpret-trailers. Empty
+   * if the commit has no recognized trailer block. */
+  trailers:       string;
   short:          string;
   parentCount:    number;
 }
 
 function getCommitMeta(hash: string): CommitMeta {
   const SEP = "---SHADOW-SEP---";
-  const format = ["%an", "%ae", "%aD", "%cn", "%ce", "%cD", "%B", "%h: %s", "%P"]
+  const format = ["%an", "%ae", "%aD", "%cn", "%ce", "%cD", "%B", "%h: %s", "%P", "%(trailers:only,unfold=true)"]
     .join(SEP);
   const raw = git(["log", "-1", `--format=${format}`, hash]);
   const parts = raw.split(SEP);
   const head = parts.slice(0, 6);
-  const tail = parts.slice(-2);
-  const message = parts.slice(6, -2).join(SEP);
+  const tail = parts.slice(-3);
+  const message = parts.slice(6, -3).join(SEP);
   return {
     hash,
     authorName:     head[0],
@@ -291,6 +295,7 @@ function getCommitMeta(hash: string): CommitMeta {
     message,
     short:          tail[0],
     parentCount:    tail[1].split(/\s+/).filter(Boolean).length,
+    trailers:       tail[2],
   };
 }
 
@@ -312,10 +317,25 @@ function stripTrailers(message: string): string {
     .join("\n").trimEnd();
 }
 
-/** Build a regex to match replay trailers: Shadow-replayed ({remote}): {hash} */
+/** Sanitize an arbitrary string into a git trailer token. Git's parser only
+ * accepts tokens matching `[A-Za-z0-9-]+`, so any other char (dot, underscore,
+ * space, etc.) is collapsed to a hyphen. */
+function sanitizeTokenPart(s: string): string {
+  return s.replace(/[^A-Za-z0-9-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+/** Build the replay trailer key for a given source remote. The remote is
+ * embedded in the key (not the value) so per-remote `--grep` works and git's
+ * trailer parser recognizes it. Example: "Shadow-replayed-origin". */
+function replayedTrailerKey(remote: string): string {
+  return `${REPLAYED_TRAILER}-${sanitizeTokenPart(remote)}`;
+}
+
+/** Build a regex to match replay trailers: Shadow-replayed-{remote}: {hash} */
 function replayedHashRe(remote: string): RegExp {
-  const esc = remote.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^${REPLAYED_TRAILER} \\(${esc}\\):\\s*([0-9a-f]{7,40})`);
+  const key = replayedTrailerKey(remote);
+  const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${esc}:\\s*([0-9a-f]{7,40})`);
 }
 
 const SEED_HASH_RE = new RegExp(`^${SEED_TRAILER}:\\s*(\\S+)\\s+([0-9a-f]{7,40})`);
@@ -380,15 +400,29 @@ function resolveParents(
   shaMapping: Map<string, string>,
   fallbackParent: string | null,
 ): string[] {
+  // Per-parent fallback: an unmapped parent is replaced with fallbackParent
+  // rather than dropped, so merge commits whose branch history was filtered
+  // out (seed boundary, path filter, orphan merges) still produce a merge
+  // on the shadow branch instead of a silent linear commit.
   const parents: string[] = [];
+  const seen = new Set<string>();
   for (const parentHash of commit.parents) {
-    const mapped = shaMapping.get(parentHash);
-    if (mapped) parents.push(mapped);
-  }
-  if (parents.length === 0 && fallbackParent) {
-    parents.push(fallbackParent);
+    const mapped = shaMapping.get(parentHash) ?? fallbackParent;
+    if (mapped && !seen.has(mapped)) {
+      parents.push(mapped);
+      seen.add(mapped);
+    }
   }
   return parents;
+}
+
+/** Check whether a commit's parsed trailer block contains the given key.
+ * Operates on git's own `%(trailers:only)` output — the key must therefore
+ * be a valid git trailer token (see sanitizeTokenPart). Free-text mentions
+ * of the key in the commit body are not matched. */
+function hasTrailerLine(trailers: string, key: string): boolean {
+  const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${esc}:`, "m").test(trailers);
 }
 
 /**
@@ -443,11 +477,12 @@ function buildRemappedTree(opts: {
 
   if (!diffOutput) return parentTree ?? null;
 
-  // Parse and apply each change
+  // Parse and apply each change. diff-tree is invoked without -M/-C above,
+  // so renames/copies surface as D+A pairs — we only handle A/M/D/T here.
   for (const line of diffOutput.split("\n").filter(Boolean)) {
-    const m = line.match(/^:\d+ (\d+) [0-9a-f]+ ([0-9a-f]+) ([AMDTRC])\d*\t(.+?)(?:\t(.+))?$/);
+    const m = line.match(/^:\d+ (\d+) [0-9a-f]+ ([0-9a-f]+) ([AMDT])\t(.+)$/);
     if (!m) continue;
-    const [, newMode, newHash, status, filePath, renameDest] = m;
+    const [, newMode, newHash, status, filePath] = m;
 
     // Map source path to target path
     let srcRelative = filePath;
@@ -465,21 +500,7 @@ function buildRemappedTree(opts: {
 
     if (status === "D") {
       git(["rm", "--cached", "-f", "--quiet", "--", targetPath], { env: idxEnv, safe: true });
-    } else if (status === "R" || status === "C") {
-      // Rename/copy: remove old, add new
-      const oldRelative = srcRelative;
-      let newRelative = renameDest ?? filePath;
-      if (sourceDir && newRelative.startsWith(`${sourceDir}/`)) {
-        newRelative = newRelative.slice(sourceDir.length + 1);
-      }
-      const oldTarget = targetDir ? `${targetDir}/${oldRelative}` : oldRelative;
-      const newTarget = targetDir ? `${targetDir}/${newRelative}` : newRelative;
-      if (status === "R") {
-        git(["rm", "--cached", "-f", "--quiet", "--", oldTarget], { env: idxEnv, safe: true });
-      }
-      git(["update-index", "--add", "--cacheinfo", `${newMode},${newHash},${newTarget}`], { env: idxEnv });
     } else {
-      // Add or modify
       git(["update-index", "--add", "--cacheinfo", `${newMode},${newHash},${targetPath}`], { env: idxEnv });
     }
   }
@@ -553,127 +574,80 @@ function buildBranchMapping(
 
 // ── Unified replay ──────────────────────────────────────────────────────────
 
+interface DirectionConfig {
+  addTrailerKey: string;
+  scanRe:        RegExp;
+  skipPrefix:    string;
+}
+
 /**
  * Build direction config from remote names.
- * Trailer format: "Shadow-replayed: {sourceRemote} {hash}"
- * When replaying from source, skip commits tagged with the target's remote
- * (they originated from the target and were already replayed back).
+ * Trailer format: "Shadow-replayed-{remote}: {hash}" — remote is sanitized
+ * into the key so git's trailer parser (strict `[A-Za-z0-9-]+` token
+ * grammar) recognizes it. When replaying from source, skip commits tagged
+ * with the target's remote (they originated from the target and were
+ * already replayed back).
  */
-function directionConfig(sourceRemote: string, targetRemote: string) {
+function directionConfig(sourceRemote: string, targetRemote: string): DirectionConfig {
   return {
-    /** Trailer key to add: "Shadow-replayed ({sourceRemote})" — value is the hash */
-    addTrailerKey: `${REPLAYED_TRAILER} (${sourceRemote})`,
+    /** Trailer key to add: "Shadow-replayed-{sourceRemote}" — value is the hash */
+    addTrailerKey: replayedTrailerKey(sourceRemote),
     /** Regex to scan for already-replayed commits from this source */
     scanRe: replayedHashRe(sourceRemote),
-    /** Trailer prefix to skip: commits tagged with the target's remote came from there */
-    skipPrefix: `${REPLAYED_TRAILER} (${targetRemote})`,
+    /** Trailer key to skip: commits tagged with the target's remote came from there */
+    skipPrefix: replayedTrailerKey(targetRemote),
   };
 }
 
 /**
- * Replay commits from one side of a pair to the other.
- *
- * @param from - "a" or "b": which side's commits to replay
- * @param branches - branches to replay (remote-tracking refs for the source)
- * @param sourceBranch - when replaying from a workspace branch (not remote refs),
- *                       the branch name to collect commits from
+ * Phase 1: build the source→target SHA mapping from existing replayed commits
+ * on the target side. Prefers scanning the target's own shadow branches when
+ * they exist; otherwise falls back to our local history (scoped to target.dir
+ * when present).
  */
-export function replayCommits(opts: {
+function scanReplayedMapping(opts: {
   pair: SyncPair;
-  from: "a" | "b";
+  target: RepoEndpoint;
   branches: string[];
-  sourceBranch?: string;
-}): { mirrored: number; branchMapping: Map<string, string>; upToDate: boolean } {
-  const { pair, from, branches } = opts;
-  const source = from === "a" ? pair.a : pair.b;
-  const target = from === "a" ? pair.b : pair.a;
-  const dc = directionConfig(source.remote, target.remote);
-
-  // 1. Scan target history for already-replayed commits
-  console.log("Scanning history for already-replayed commits...");
-
-  // For remote-based scanning (target has shadow branches on its remote)
+  dc: DirectionConfig;
+}): Map<string, string> {
+  const { pair, target, branches, dc } = opts;
   const shadowRefs = branches
     .map(b => `${target.remote}/${shadowBranchName(pair.name, b)}`)
     .filter(r => refExists(r));
 
-  let shaMapping: Map<string, string>;
   if (shadowRefs.length > 0) {
-    shaMapping = buildTrailerMapping(
+    return buildTrailerMapping(
       ["log", ...shadowRefs, `--grep=^${dc.addTrailerKey}`],
       dc.scanRe,
     );
-  } else {
-    // Fallback: scan all history (for shadow branches on our side)
-    const logArgs = ["log", "--all", `--grep=^${dc.addTrailerKey}`];
-    if (target.dir) logArgs.push("--", `${target.dir}/`);
-    shaMapping = buildTrailerMapping(logArgs, dc.scanRe);
   }
-  console.log(`Found ${shaMapping.size} previously replayed commit(s).`);
+  const logArgs = ["log", "--all", `--grep=^${dc.addTrailerKey}`];
+  if (target.dir) logArgs.push("--", `${target.dir}/`);
+  return buildTrailerMapping(logArgs, dc.scanRe);
+}
 
-  // 2. Find seed
-  const seed = findSeed(pair.name);
-  if (seed) {
-    console.log(`Found seed baseline: ${seed.seedHash.slice(0, 10)} (skipping earlier history).`);
-  }
-
-  // 3. Collect commits from source.
-  // If sourceBranch is set AND source has a url (it's a remote), use remote-tracking refs.
-  // If sourceBranch is set and source has no url (it's the workspace), use bare branch name.
-  const sourceRefs = opts.sourceBranch
-    ? [source.url ? `${source.remote}/${opts.sourceBranch}` : opts.sourceBranch]
-    : branches.map(b => `${source.remote}/${b}`);
-
-  // Seed boundary: limits how far back we scan.
-  // Only use the boundary if it's actually an ancestor of the source refs.
-  // The seed hash comes from whichever side was seeded and may not exist
-  // in the other side's history.
-  let seedBoundary: string | undefined;
-  if (seed) {
-    const candidate = opts.sourceBranch ? seed.seedCommit : seed.seedHash;
-    const ref = sourceRefs[0];
-    if (git(["merge-base", "--is-ancestor", candidate, ref], { safe: true }).ok) {
-      seedBoundary = candidate;
-    }
-    // No boundary = scan all commits on source (dedup handles the rest)
-  }
-
-  const allCommits = source.dir
-    ? collectCommitsForDir(sourceRefs, source.dir, seedBoundary)
-    : collectBranchCommits(sourceRefs, seedBoundary);
-
-  // 4. Filter: skip already replayed + skip commits that came from the other side
-  const newCommits = allCommits.filter(c => {
-    if (shaMapping.has(c.hash)) return false;
-    const meta = getCommitMeta(c.hash);
-    if (meta.message.includes(`${dc.skipPrefix}`)) return false;
-    return true;
-  });
-
-  if (newCommits.length === 0) {
-    const branchMapping = opts.sourceBranch
-      ? new Map<string, string>()
-      : buildBranchMapping(source.remote, branches, shaMapping);
-    return { mirrored: 0, branchMapping, upToDate: true };
-  }
-
-  console.log(`Found ${newCommits.length} new commit(s) to replay.\n`);
-
-  // 5. Seed the SHA mapping so the first replayed commit chains naturally
-  // to the target's history (shared ancestry for `git merge`).
-  // The seed maps seedHash → seedCommit. For commits whose parents aren't
-  // in shaMapping (e.g. replaying from the other direction), we fall back
-  // to the target's main branch tip.
-  if (seed) {
-    shaMapping.set(seed.seedHash, seed.seedCommit);
-  }
-  const fallbackParent = refExists(`${target.remote}/main`)
-    ? git(["rev-parse", `${target.remote}/main`])
-    : null;
-
-  // 6. Replay loop — diff-based: each commit's tree is built by applying
-  //    only the changed files to the previous replayed tree.
-  const tmpIndex = path.join(os.tmpdir(), `shadow-replay-${Date.now()}`);
+/**
+ * Phase 6: walk newCommits in topo order, building each replayed tree by
+ * diff-applying the source commit onto the previous tree, then committing
+ * with the original author/committer identity and an added trailer.
+ *
+ * `shaMapping` is mutated: every replayed source hash is recorded so later
+ * commits in the same batch can resolve their parents.
+ */
+function runReplayLoop(opts: {
+  newCommits: TopoCommit[];
+  shaMapping: Map<string, string>;
+  fallbackParent: string | null;
+  source: RepoEndpoint;
+  target: RepoEndpoint;
+  dc: DirectionConfig;
+}): { lastSHA: string | null } {
+  const { newCommits, shaMapping, fallbackParent, source, target, dc } = opts;
+  const tmpIndex = path.join(
+    os.tmpdir(),
+    `shadow-replay-${process.pid}-${crypto.randomBytes(6).toString("hex")}`,
+  );
 
   let lastTree: string | null = null;
   let lastSHA: string | null = null;
@@ -683,7 +657,7 @@ export function replayCommits(opts: {
 
       // Commits that carry the skip trailer came from the other direction
       // (e.g. forwarded by us then echoed back) — record but don't replay content
-      const isEcho = meta.message.includes(`${dc.addTrailerKey}`);
+      const isEcho = hasTrailerLine(meta.trailers, dc.addTrailerKey);
 
       if (isEcho) {
         console.log(`  Skipping ${meta.short} (echo from other direction).`);
@@ -743,8 +717,114 @@ export function replayCommits(opts: {
     fs.rmSync(tmpIndex, { force: true });
   }
 
-  const branchMapping = opts.sourceBranch
-    ? new Map([[branches[0] ?? "main", lastSHA!]])
+  return { lastSHA };
+}
+
+/**
+ * Replay commits from one side of a pair to the other.
+ *
+ * @param from - "a" or "b": which side's commits to replay
+ * @param branches - branches to replay (remote-tracking refs for the source)
+ * @param sourceBranch - when replaying from a workspace branch (not remote refs),
+ *                       the branch name to collect commits from
+ */
+export function replayCommits(opts: {
+  pair: SyncPair;
+  from: "a" | "b";
+  branches: string[];
+  sourceBranch?: string;
+}): { mirrored: number; branchMapping: Map<string, string>; upToDate: boolean } {
+  const { pair, from, branches } = opts;
+  const source = from === "a" ? pair.a : pair.b;
+  const target = from === "a" ? pair.b : pair.a;
+  const dc = directionConfig(source.remote, target.remote);
+
+  // 1. Scan target history for already-replayed commits
+  console.log("Scanning history for already-replayed commits...");
+  const shaMapping = scanReplayedMapping({ pair, target, branches, dc });
+  console.log(`Found ${shaMapping.size} previously replayed commit(s).`);
+
+  // 2. Find seed
+  const seed = findSeed(pair.name);
+  if (seed) {
+    console.log(`Found seed baseline: ${seed.seedHash.slice(0, 10)} (skipping earlier history).`);
+  }
+
+  // 3. Collect commits from source.
+  // If sourceBranch is set AND source has a url (it's a remote), use remote-tracking refs.
+  // If sourceBranch is set and source has no url (it's the workspace), use bare branch name.
+  const sourceRefs = opts.sourceBranch
+    ? [source.url ? `${source.remote}/${opts.sourceBranch}` : opts.sourceBranch]
+    : branches.map(b => `${source.remote}/${b}`);
+
+  // Seed boundary: limits how far back we scan.
+  // Only use the boundary if it's actually an ancestor of the source refs.
+  // The seed hash comes from whichever side was seeded and may not exist
+  // in the other side's history.
+  let seedBoundary: string | undefined;
+  if (seed) {
+    const candidate = opts.sourceBranch ? seed.seedCommit : seed.seedHash;
+    const ref = sourceRefs[0];
+    if (git(["merge-base", "--is-ancestor", candidate, ref], { safe: true }).ok) {
+      seedBoundary = candidate;
+    }
+    // No boundary = scan all commits on source (dedup handles the rest)
+  }
+
+  const allCommits = source.dir
+    ? collectCommitsForDir(sourceRefs, source.dir, seedBoundary)
+    : collectBranchCommits(sourceRefs, seedBoundary);
+
+  // 4. Filter: skip already replayed + skip commits that came from the other side
+  const newCommits = allCommits.filter(c => {
+    if (shaMapping.has(c.hash)) return false;
+    const meta = getCommitMeta(c.hash);
+    if (hasTrailerLine(meta.trailers, dc.skipPrefix)) return false;
+    return true;
+  });
+
+  if (newCommits.length === 0) {
+    const branchMapping = opts.sourceBranch
+      ? new Map<string, string>()
+      : buildBranchMapping(source.remote, branches, shaMapping);
+    return { mirrored: 0, branchMapping, upToDate: true };
+  }
+
+  console.log(`Found ${newCommits.length} new commit(s) to replay.\n`);
+
+  // 5. Seed the SHA mapping so the first replayed commit chains naturally
+  // to the target's history (shared ancestry for `git merge`).
+  // The seed records a two-way correspondence between the source tip at
+  // seed time (seedHash) and the local seed commit (seedCommit). We add
+  // both directions so whichever endpoint a source parent references, it
+  // maps to the target-side counterpart — this is what preserves merge
+  // structure for merges whose "main side" parent is the seed commit
+  // itself (e.g. --allow-unrelated-histories merges).
+  //
+  // For truly unmapped parents (history outside the replay set), fall
+  // back to the target's current main tip. That tip usually has the right
+  // tree for diff application (deletions etc. resolve against real
+  // content), while the seed would give an empty pre-sync tree.
+  if (seed) {
+    shaMapping.set(seed.seedHash, seed.seedCommit);
+    shaMapping.set(seed.seedCommit, seed.seedHash);
+  }
+  const fallbackParent = refExists(`${target.remote}/main`)
+    ? git(["rev-parse", `${target.remote}/main`])
+    : null;
+
+  // 6. Replay loop — diff-based: each commit's tree is built by applying
+  //    only the changed files to the previous replayed tree.
+  const { lastSHA } = runReplayLoop({
+    newCommits, shaMapping, fallbackParent, source, target, dc,
+  });
+
+  // Defensive: lastSHA can remain null only if every commit in newCommits
+  // was skipped (buildRemappedTree returned null). Rev-list's path filter
+  // makes this effectively unreachable today, but emit an empty map instead
+  // of lying to the caller's Map<string, string> with a null value.
+  const branchMapping: Map<string, string> = opts.sourceBranch
+    ? (lastSHA ? new Map([[branches[0] ?? "main", lastSHA]]) : new Map())
     : buildBranchMapping(source.remote, branches, shaMapping);
 
   console.log();

@@ -81,6 +81,7 @@ function _runSyncCore(options: SyncOptions): number {
     validateName(pair.name, "Pair name");
     validateName(source.remote, "Source remote");
     validateName(target.remote, "Target remote");
+    if (options.branch) validateName(options.branch, "Branch");
 
     ensureRemote(pair.a);
     ensureRemote(pair.b);
@@ -155,8 +156,13 @@ function _runSyncCore(options: SyncOptions): number {
         console.log("  Already up to date.");
       } else {
 
-        // Fetch target to know current state
-        git(["fetch", target.remote], { safe: true });
+        // Fetch target to know current state — warn on failure rather than
+        // proceeding silently, since stale tracking refs mis-classify divergence.
+        const fetchResult = git(["fetch", target.remote], { safe: true });
+        if (!fetchResult.ok) {
+          console.error(`  ⚠ Failed to fetch '${target.remote}': ${fetchResult.stderr}`);
+          console.error(`    Continuing with local tracking refs — divergence checks may be stale.`);
+        }
 
         // Update shadow branches on target's remote
         for (const branch of validBranches) {

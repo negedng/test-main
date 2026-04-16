@@ -6,7 +6,7 @@ import { assertEqual, assertIncludes, assertNotIncludes } from "./assert";
  * trigger pattern. This prevents cascade loops where sync triggers forward
  * triggers sync, etc.
  *
- * The trailer format is: Shadow-replayed ({sourceRemote}): {hash}
+ * The trailer format is: Shadow-replayed-{sourceRemote}: {hash}
  * When syncing from b→a, the source remote is "team" (the test harness default).
  * When syncing from a→b, the source remote is "origin".
  * Each direction's commits must only contain its OWN source remote name,
@@ -24,9 +24,9 @@ export default function run() {
 
     // 3. Check shadow branch trailers on a's side
     const pullLog = getShadowLogFull(env);
-    assertIncludes(pullLog, `Shadow-replayed (${env.remoteName})`,
+    assertIncludes(pullLog, `Shadow-replayed-${env.remoteName}:`,
       "pull commits should have trailer with b's remote name");
-    assertNotIncludes(pullLog, "Shadow-replayed (origin)",
+    assertNotIncludes(pullLog, "Shadow-replayed-origin:",
       "pull commits must NOT have a's remote name — would trigger a→b cascade");
 
     // 4. Merge shadow into local, add a local file
@@ -39,9 +39,9 @@ export default function run() {
 
     // 6. Check shadow branch trailers on b's side
     const pushLog = getExternalShadowLogFull(env);
-    assertIncludes(pushLog, "Shadow-replayed (origin)",
+    assertIncludes(pushLog, "Shadow-replayed-origin:",
       "push commits should have trailer with a's remote name");
-    assertNotIncludes(pushLog, `Shadow-replayed (${env.remoteName})`,
+    assertNotIncludes(pushLog, `Shadow-replayed-${env.remoteName}:`,
       "push commits must NOT have b's remote name — would trigger b→a cascade");
 
   } finally {
