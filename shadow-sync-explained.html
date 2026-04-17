@@ -469,7 +469,7 @@
   </tr>
   <tr>
     <td><code>npm test</code></td>
-    <td>Run the 16 automated test files (covers pull, push, merges, branches, multi-seed, echo mapping, edge cases, multi-repo).</td>
+    <td>Run the 17 automated test files (covers pull, push, merges, branches, multi-seed, echo mapping, multi-pair root files, edge cases, multi-repo).</td>
   </tr>
 </table>
 
@@ -776,6 +776,43 @@ Shadow-seed: backend 3fcc1ed4a5c0bdc92f4a7...</code></pre>
                                                D backend/old-file.txt
                                         result: full RepoA tree with exactly 3 changes</div>
 
+<h3>Tip-tree refresh before push (<code>composeShadowTip</code>)</h3>
+<p>
+  The replay chain above builds each tree from the <em>previous</em> replayed tree &mdash; which traces
+  back to A's seed tree. That means A's post-seed changes to non-pair paths (root files, other pairs'
+  directories, any file outside <code>{pair.dir}/</code>) never propagate through the chain. If a user
+  merges the shadow branch after modifying such files on A's main, git can silently revert them
+  because the shadow tree holds seed-era content where A/main holds current content.
+</p>
+<p>
+  To fix this, <code>composeShadowTip()</code> rewrites the replayed tip at push time when
+  <code>target.dir</code> is non-empty:
+</p>
+<ol class="step-list">
+  <li><span class="step-num">1</span><div>
+    <strong>Pick a splice base.</strong> Prefer <code>{target}/{branch}^{tree}</code>. If that branch
+    doesn't exist on the target remote yet (e.g., syncing a brand-new source branch), find the
+    source branch with the most recent merge-base with <code>{branch}</code> (its parent branch)
+    and use <em>its</em> target-side tree. Last resort: <code>{target}/main^{tree}</code>.
+  </div></li>
+  <li><span class="step-num">2</span><div>
+    <strong>Splice.</strong> <code>spliceSubtree()</code> uses a temp index: <code>read-tree</code>
+    the base, <code>rm -r --cached {target.dir}</code>, <code>read-tree --prefix={target.dir}/</code>
+    of the replayed tip's <code>{target.dir}/</code> subtree, then <code>write-tree</code>.
+  </div></li>
+  <li><span class="step-num">3</span><div>
+    <strong>Re-commit with the composed tree</strong>, reusing the replayed commit's parents,
+    author, committer, timestamps, and message (including the <code>Shadow-replayed-*</code>
+    trailer). The shadow branch tip is the new commit; subsequent scans still find the trailer.
+  </div></li>
+</ol>
+<div class="highlight-box">
+  The invariant this preserves: <strong>shadow/{pair}/{branch}'s tree equals target/{branch}'s
+  tree, with only <code>{pair.dir}/</code> swapped for the replay's pair content.</strong>
+  A plain <code>git merge</code> then only diffs that subdirectory &mdash; everything outside stays
+  aligned with what A actually has on that branch right now.
+</div>
+
 <!-- ── 7. How Merges Work ──────────────────────────────────────────────── -->
 
 <h2 id="merge">7. How Merges Work</h2>
@@ -909,8 +946,13 @@ git merge origin/shadow/backend/main</code></pre>
 <ol>
   <li>
     <strong>Skip already-replayed commits.</strong>
-    Phase 1 of the engine (<code>scanReplayedMapping()</code>) scans the target's shadow branch history and
-    builds a <code>sourceHash &rarr; targetSHA</code> map. Commits already in the map are skipped this run.
+    Phase 1 of the engine (<code>scanReplayedMapping()</code>) scans the target's shadow branch history
+    <em>for this pair only</em> and builds a <code>sourceHash &rarr; targetSHA</code> map. Commits
+    already in the map are skipped this run. The scan is deliberately pair-scoped: the trailer key
+    doesn't encode the pair name, so a broader <code>--all</code> scan would pick up trailers from other
+    pairs that happen to share the same source remote and falsely flag a commit as already replayed.
+    If the target shadow branch doesn't yet exist, the map starts empty (correct "no prior replays"
+    state).
   </li>
   <li>
     <strong>Skip &mdash; and remap &mdash; "echo" commits.</strong>
@@ -1055,7 +1097,7 @@ const result = runSync({ from: "b", pair: "backend" });
 
 <p>
   <code>runSync</code> accepts <code>{ pair?, from?, branch? }</code> and returns
-  <code>{ exitCode, stdout, stderr }</code>. This is how <code>shadow-tests/harness.ts</code> runs 16 test
+  <code>{ exitCode, stdout, stderr }</code>. This is how <code>shadow-tests/harness.ts</code> runs 17 test
   files against ephemeral git environments.
 </p>
 
@@ -1070,7 +1112,7 @@ const result = runSync({ from: "b", pair: "backend" });
   <tr><td><code>shadow-setup.ts</code></td><td>Bootstrap: builds the seed commit via <code>git commit-tree</code> and pushes it to the target remote; additive (run per branch for multi-seed)</td></tr>
   <tr><td><code>shadow-config.example.json</code></td><td>Configuration template with all supported options</td></tr>
   <tr><td><code>.shadowignore</code></td><td>Per-repo file-exclusion patterns (auto-discovered from source tree)</td></tr>
-  <tr><td><code>shadow-tests/</code></td><td>16 consolidated test files: pull-content, pull-paths, pull-branches, pull-multi-branch-seed, pull-merge-topology, pull-force-rewrite, pull-warnings, pull-conflict, pull-echo-mapping, push-content, push-ops, push-merge, push-diverged, push-shadowignore, multi-repo, round-trip</td></tr>
+  <tr><td><code>shadow-tests/</code></td><td>17 consolidated test files: pull-content, pull-paths, pull-branches, pull-multi-branch-seed, pull-merge-topology, pull-force-rewrite, pull-warnings, pull-conflict, pull-echo-mapping, push-content, push-ops, push-merge, push-diverged, push-shadowignore, multi-repo, multi-pair-root-files, round-trip</td></tr>
   <tr><td><code>.github/workflows/shadow-sync.yml</code></td><td>CI workflow: pull from B on schedule</td></tr>
   <tr><td><code>.github/workflows/shadow-forward.yml</code></td><td>CI workflow: push from A on schedule (needs PAT)</td></tr>
 </table>

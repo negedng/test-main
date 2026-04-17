@@ -204,6 +204,6 @@ Automated tests covering pull, push, merge, branching, binary files, LFS, symlin
 | `shadow-sync.ts` | Single script for both directions (--from a or --from b) |
 | `.shadowignore` | Ignore patterns (auto-discovered from source commit, like `.gitignore`) |
 | `shadow-sync-explained.html` | Detailed technical documentation |
-| `shadow-tests/` | 16 automated tests |
+| `shadow-tests/` | 17 automated tests |
 | `.github/workflows/shadow-sync.yml` | CI pull workflow (cron) |
 | `.github/workflows/shadow-forward.yml` | CI push workflow (on shadow branch push) |

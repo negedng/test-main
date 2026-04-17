@@ -495,6 +495,120 @@ function buildRemappedTree(opts: {
   return git(["write-tree"], { env: idxEnv });
 }
 
+/**
+ * Produce a new tree that equals `baseTree` with `subdir/` replaced by
+ * `subtreeContent`. Used to keep shadow branches carrying the target side's
+ * *current* non-pair content (not the seed-era snapshot the replay chain
+ * would otherwise freeze).
+ */
+function spliceSubtree(baseTree: string, subdir: string, subtreeContent: string): string {
+  const tmpIndex = path.join(
+    os.tmpdir(),
+    `shadow-splice-${process.pid}-${crypto.randomBytes(6).toString("hex")}`,
+  );
+  const idxEnv = { GIT_INDEX_FILE: tmpIndex };
+  try {
+    git(["read-tree", baseTree], { env: idxEnv });
+    // Clear any existing entries under subdir so --prefix read-tree can succeed.
+    git(["rm", "-r", "--cached", "-q", "--ignore-unmatch", "--", subdir], { env: idxEnv, safe: true });
+    git(["read-tree", `--prefix=${subdir}/`, subtreeContent], { env: idxEnv });
+    return git(["write-tree"], { env: idxEnv });
+  } finally {
+    fs.rmSync(tmpIndex, { force: true });
+  }
+}
+
+/**
+ * For a branch on the source side that has no counterpart on the target side,
+ * pick the existing source branch whose merge-base with `branch` is the most
+ * recent — i.e., the branch `branch` was created from. Returns null if no
+ * common ancestor is found (only true for truly unrelated histories).
+ */
+function findParentSourceBranch(
+  sourceRemote: string,
+  branch: string,
+  allBranches: string[],
+): string | null {
+  let best: string | null = null;
+  let bestTime = -Infinity;
+  for (const other of allBranches) {
+    if (other === branch) continue;
+    const otherRef = `${sourceRemote}/${other}`;
+    if (!refExists(otherRef)) continue;
+    const mb = git(["merge-base", `${sourceRemote}/${branch}`, otherRef], { safe: true });
+    if (!mb.ok || !mb.stdout) continue;
+    const tsRes = git(["log", "-1", "--format=%ct", mb.stdout], { safe: true });
+    if (!tsRes.ok) continue;
+    const ts = parseInt(tsRes.stdout, 10);
+    if (!Number.isFinite(ts)) continue;
+    if (ts > bestTime) {
+      bestTime = ts;
+      best = other;
+    }
+  }
+  return best;
+}
+
+/**
+ * Rewrite the replayed tip so its tree = target-side branch's current tree
+ * with only `target.dir/` replaced by the replay's pair content. Preserves
+ * the replay trailer + author/committer/message so downstream scans and
+ * ancestry still work.
+ *
+ * Returns the original SHA unchanged when:
+ *   - target.dir is empty (no non-pair content exists on target side),
+ *   - no usable target-side tree can be found,
+ *   - the composed tree already matches the replayed tree (no rewrite needed).
+ *
+ * Called once per branch at push time in `shadow-sync.ts`.
+ */
+export function composeShadowTip(opts: {
+  target: RepoEndpoint;
+  branch: string;
+  replayedSHA: string;
+  allSourceBranches: string[];
+  sourceRemote: string;
+}): string {
+  const { target, branch, replayedSHA, allSourceBranches, sourceRemote } = opts;
+  if (!target.dir) return replayedSHA;
+
+  // 1. Pick the splice source tree.
+  //    Precedence: target/<branch> → parent branch's target ref → target/main.
+  const tryResolveTree = (ref: string): string | null => {
+    if (!refExists(ref)) return null;
+    return git(["rev-parse", `${ref}^{tree}`]);
+  };
+  let sliceSourceTree = tryResolveTree(`${target.remote}/${branch}`);
+  if (!sliceSourceTree) {
+    const parentBranch = findParentSourceBranch(sourceRemote, branch, allSourceBranches);
+    if (parentBranch) {
+      sliceSourceTree = tryResolveTree(`${target.remote}/${parentBranch}`);
+    }
+  }
+  if (!sliceSourceTree) {
+    sliceSourceTree = tryResolveTree(`${target.remote}/main`);
+  }
+  if (!sliceSourceTree) return replayedSHA;
+
+  // 2. Extract the replayed tip's pair-scoped subtree.
+  const pairSubtreeRes = git(["rev-parse", `${replayedSHA}:${target.dir}`], { safe: true });
+  if (!pairSubtreeRes.ok) return replayedSHA;
+
+  // 3. Splice and see whether anything would actually change.
+  const composedTree = spliceSubtree(sliceSourceTree, target.dir, pairSubtreeRes.stdout);
+  const replayedTree = git(["rev-parse", `${replayedSHA}^{tree}`]);
+  if (composedTree === replayedTree) return replayedSHA;
+
+  // 4. Re-commit with the composed tree, preserving parents and metadata.
+  const meta = getCommitMeta(replayedSHA);
+  const parentsStr = git(["log", "-1", "--format=%P", replayedSHA]);
+  const parents = parentsStr.split(/\s+/).filter(Boolean);
+  const parentArgs = parents.flatMap(p => ["-p", p]);
+  return git(["commit-tree", composedTree, ...parentArgs, "-m", meta.message], {
+    env: commitEnv(meta),
+  });
+}
+
 /** Compile a .shadowignore pattern (supports * and ** globs) into a regex. */
 function compileIgnorePattern(pattern: string): RegExp {
   const regex = pattern
@@ -591,9 +705,12 @@ function directionConfig(sourceRemote: string, targetRemote: string): DirectionC
 
 /**
  * Build the source→target SHA mapping from existing replayed commits
- * on the target side. Prefers scanning the target's own shadow branches when
- * they exist; otherwise falls back to our local history (scoped to target.dir
- * when present).
+ * on the target side. Scans only the target's own shadow branches for this
+ * pair — no cross-pair `--all` fallback, because the
+ * `Shadow-replayed-{sourceRemote}` trailer doesn't encode the pair name,
+ * so a broader scan would pick up trailers from other pairs that happen
+ * to share the same source remote (e.g., both pairs sourcing from
+ * `origin` in workspace mode).
  */
 function scanReplayedMapping(opts: {
   pair: SyncPair;
@@ -606,15 +723,13 @@ function scanReplayedMapping(opts: {
     .map(b => `${target.remote}/${shadowBranchName(pair.name, b)}`)
     .filter(r => refExists(r));
 
-  if (shadowRefs.length > 0) {
-    return buildTrailerMapping(
-      ["log", ...shadowRefs, `--grep=^${dc.addTrailerKey}`],
-      dc.scanRe,
-    );
+  if (shadowRefs.length === 0) {
+    return new Map();
   }
-  const logArgs = ["log", "--all", `--grep=^${dc.addTrailerKey}`];
-  if (target.dir) logArgs.push("--", `${target.dir}/`);
-  return buildTrailerMapping(logArgs, dc.scanRe);
+  return buildTrailerMapping(
+    ["log", ...shadowRefs, `--grep=^${dc.addTrailerKey}`],
+    dc.scanRe,
+  );
 }
 
 /**
