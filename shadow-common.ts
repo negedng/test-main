@@ -565,6 +565,7 @@ interface DirectionConfig {
   addTrailerKey: string;
   scanRe: RegExp;
   skipTrailerKey: string;
+  skipScanRe: RegExp;
 }
 
 /**
@@ -583,6 +584,8 @@ function directionConfig(sourceRemote: string, targetRemote: string): DirectionC
     scanRe: replayedHashRe(sourceRemote),
     /** Trailer key to skip: commits tagged with the target's remote came from there */
     skipTrailerKey: replayedTrailerKey(targetRemote),
+    /** Regex to extract the original target-side hash from a skipped commit's trailer */
+    skipScanRe: replayedHashRe(targetRemote),
   };
 }
 
@@ -754,16 +757,33 @@ function collectSourceCommits(opts: {
     : collectBranchCommits(sourceRefs, boundaries);
 }
 
-/** Drop commits that are already replayed or were echoed back from the target. */
+/**
+ * Drop commits that are already replayed or were echoed back from the target.
+ *
+ * For echoed commits (those carrying the target's replayed trailer), extract
+ * the original target-side hash from the trailer and — when that commit still
+ * exists locally — record echo → original in shaMapping. Downstream parent
+ * resolution then re-uses the original target commit directly (same SHA),
+ * instead of creating a new replayed copy or falling back to the target's
+ * current branch tip. This keeps ancestry aligned across repos so later merges
+ * find the real common ancestor.
+ */
 function filterNewCommits(
   allCommits: TopoCommit[],
   shaMapping: Map<string, string>,
-  skipTrailerKey: string,
+  dc: DirectionConfig,
 ): TopoCommit[] {
   return allCommits.filter(c => {
     if (shaMapping.has(c.hash)) return false;
     const meta = getCommitMeta(c.hash);
-    return !hasTrailerLine(meta.trailers, skipTrailerKey);
+    if (!hasTrailerLine(meta.trailers, dc.skipTrailerKey)) return true;
+    const match = meta.trailers.split("\n")
+      .map(l => l.match(dc.skipScanRe))
+      .find(m => m);
+    if (match && refExists(match[1])) {
+      shaMapping.set(c.hash, match[1]);
+    }
+    return false;
   });
 }
 
@@ -805,7 +825,7 @@ export function replayCommits(opts: {
   }
 
   const allCommits = collectSourceCommits({ source, branches, sourceBranch, seeds });
-  const newCommits = filterNewCommits(allCommits, shaMapping, dc.skipTrailerKey);
+  const newCommits = filterNewCommits(allCommits, shaMapping, dc);
 
   if (newCommits.length === 0) {
     const branchMapping = sourceBranch

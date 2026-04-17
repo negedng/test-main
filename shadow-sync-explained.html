@@ -444,7 +444,7 @@
   </tr>
   <tr>
     <td><code>npm test</code></td>
-    <td>Run the 15 automated test files (covers pull, push, merges, branches, multi-seed, edge cases, multi-repo).</td>
+    <td>Run the 16 automated test files (covers pull, push, merges, branches, multi-seed, echo mapping, edge cases, multi-repo).</td>
   </tr>
 </table>
 
@@ -646,13 +646,17 @@ Shadow-seed: backend 3fcc1ed4a5c0bdc92f4a7...</code></pre>
   <li><span class="step-num">4</span><div>
     <strong>Filter.</strong> <code>filterNewCommits()</code> drops commits already in the mapping (skipped &mdash;
     already replayed) and echo commits that carry the <em>target's</em> remote trailer (round-trip prevention &mdash;
-    see <a href="#dedup">Deduplication</a>).
+    see <a href="#dedup">Deduplication</a>). For each echo, the original target-side hash is read out of the
+    trailer and &mdash; if that commit is still reachable in the local repo &mdash; recorded in the SHA mapping
+    as <code>echo &rarr; original</code>. Subsequent commits whose parent is the echo will then be wired to
+    the original commit object directly.
   </div></li>
   <li><span class="step-num">5</span><div>
     <strong>Seed mapping &amp; fallback parent.</strong> <code>seedShaMapping()</code> records
     <code>seedTrailerHash &harr; seedCommitHash</code> in both directions for every seed. <code>fallbackParent</code>
-    is set to the target's main tip &mdash; any source parent that doesn't map (seed boundary, path filter,
-    orphan merge) falls back to this, so merge commits stay merges on the shadow side.
+    is set to the target's main tip &mdash; any source parent that <em>still</em> doesn't map after the echo
+    pass (seed boundary, path filter, orphan merge, or an echo whose original was force-removed) falls back
+    to this, so merge commits stay merges on the shadow side.
   </div></li>
   <li><span class="step-num">6</span><div>
     <strong>Replay loop.</strong> <code>runReplayLoop()</code> walks the remaining commits in topo order:
@@ -763,6 +767,16 @@ Shadow-seed: backend 3fcc1ed4a5c0bdc92f4a7...</code></pre>
   is replayed once and reused &mdash; preserving shared ancestry rather than duplicating commits.
 </p>
 
+<div class="highlight-box">
+  <strong>Cross-repo shared ancestry via echo mapping:</strong> if a merge on the source brought in an
+  <em>echo</em> commit (one that originated on the target), the filter pass records the echo's original
+  target-side hash in the SHA mapping (see section 4, step 4). When the merge is replayed, that parent
+  resolves to the literal original commit &mdash; not a re-replay and not the target's current branch tip.
+  The replayed merge ends up with one parent on the source side (replayed normally) and one parent that is
+  the genuine target-side commit object, shared by SHA. Later <code>git merge</code> on the target finds the
+  real common ancestor and avoids duplicating work.
+</div>
+
 <h3>7b. Shadow branch reconciliation (during push)</h3>
 <p>
   After replay, the tool pushes the result to <code>shadow/{pair}/{branch}</code> on the target remote.
@@ -871,11 +885,18 @@ git merge origin/shadow/backend/main</code></pre>
     builds a <code>sourceHash &rarr; targetSHA</code> map. Commits already in the map are skipped this run.
   </li>
   <li>
-    <strong>Skip "echo" commits.</strong>
+    <strong>Skip &mdash; and remap &mdash; "echo" commits.</strong>
     When syncing from A to B, the replayed commit on B carries
     <code>Shadow-replayed-repo-a: &hellip;</code>. Later, when the user merges that shadow commit into B's main
-    and we sync B back to A, the engine sees the A-sourced trailer and skips it. The trailer key it looks
-    for is direction-specific:
+    and we sync B back to A, the engine sees the A-sourced trailer. Two things happen:
+    <ol>
+      <li>The echo commit itself is dropped from the new-commits list (no replay &mdash; that would create a duplicate).</li>
+      <li>The hash inside the trailer points back at the <em>original</em> A-side commit. If that commit is still
+      reachable in the local repo, the engine records <code>echo &rarr; original</code> in the SHA mapping. Any
+      later commit (notably a merge) whose parent is the echo will then resolve to the original commit object
+      itself &mdash; same SHA, shared by both sides.</li>
+    </ol>
+    The trailer key the engine looks for is direction-specific:
     <ul>
       <li>Syncing A&rarr;B: add <code>Shadow-replayed-repo-a</code>, skip anything carrying <code>Shadow-replayed-repo-b</code>.</li>
       <li>Syncing B&rarr;A: add <code>Shadow-replayed-repo-b</code>, skip anything carrying <code>Shadow-replayed-repo-a</code>.</li>
@@ -883,18 +904,20 @@ git merge origin/shadow/backend/main</code></pre>
   </li>
 </ol>
 
-<div class="diagram">RepoA commit: "Add feature X"
+<div class="diagram">RepoA commit X (sha = abc123)
       |
       v  sync --from a
-RepoB shadow commit: "Add feature X
-                       Shadow-replayed-repo-a: abc123"
+RepoB shadow commit X' (carries Shadow-replayed-repo-a: abc123)
       |
       v  merge into RepoB main
-RepoB commit: "Add feature X
-               Shadow-replayed-repo-a: abc123"
+RepoB main now contains X', plus a merge commit M whose parents are
+[B/main_tip, X']
       |
       v  sync --from b
-      SKIPPED &mdash; trailer says this came from repo-a</div>
+      X' is dropped (echo); mapping recorded:  X' -&gt; abc123
+      M is replayed as M' with parents [replayed-B-tip, abc123]
+                                                     ^^^^^^
+                            literal A-side commit, shared by SHA</div>
 
 <div class="highlight-box">
   Trailer matching is <strong>line-anchored</strong>: an identifier that happens to appear in a commit body
@@ -1004,7 +1027,7 @@ const result = runSync({ from: "b", pair: "backend" });
 
 <p>
   <code>runSync</code> accepts <code>{ pair?, from?, branch? }</code> and returns
-  <code>{ exitCode, stdout, stderr }</code>. This is how <code>shadow-tests/harness.ts</code> runs 14 test
+  <code>{ exitCode, stdout, stderr }</code>. This is how <code>shadow-tests/harness.ts</code> runs 16 test
   files against ephemeral git environments.
 </p>
 
@@ -1019,7 +1042,7 @@ const result = runSync({ from: "b", pair: "backend" });
   <tr><td><code>shadow-setup.ts</code></td><td>Bootstrap: builds the seed commit via <code>git commit-tree</code> and pushes it to the target remote; additive (run per branch for multi-seed)</td></tr>
   <tr><td><code>shadow-config.example.json</code></td><td>Configuration template with all supported options</td></tr>
   <tr><td><code>.shadowignore</code></td><td>Per-repo file-exclusion patterns (auto-discovered from source tree)</td></tr>
-  <tr><td><code>shadow-tests/</code></td><td>15 consolidated test files: pull-content, pull-paths, pull-branches, pull-multi-branch-seed, pull-merge-topology, pull-force-rewrite, pull-warnings, pull-conflict, push-content, push-ops, push-merge, push-diverged, push-shadowignore, multi-repo, round-trip</td></tr>
+  <tr><td><code>shadow-tests/</code></td><td>16 consolidated test files: pull-content, pull-paths, pull-branches, pull-multi-branch-seed, pull-merge-topology, pull-force-rewrite, pull-warnings, pull-conflict, pull-echo-mapping, push-content, push-ops, push-merge, push-diverged, push-shadowignore, multi-repo, round-trip</td></tr>
   <tr><td><code>.github/workflows/shadow-sync.yml</code></td><td>CI workflow: pull from B on schedule</td></tr>
   <tr><td><code>.github/workflows/shadow-forward.yml</code></td><td>CI workflow: push from A on schedule (needs PAT)</td></tr>
 </table>
